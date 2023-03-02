@@ -72,9 +72,10 @@ go = ['dep:wit-bindgen-go']
 
 [dev-dependencies]
 heck = { workspace = true }
-wasmtime = { version = "6", features = ['component-model'] }
+wasmtime = { version = "7", features = ['component-model'] }
 test-artifacts = { path = 'crates/test-rust-wasm/artifacts' }
 wit-parser = { workspace = true }
 
 [patch.crates-io]
 wit-parser = { git = "https://github.com/fermyon/wasm-tools", branch = "wit-templates" }
+wasmtime = { git = "https://github.com/dicej/wasmtime", branch = "wit-templates-minimal" }
