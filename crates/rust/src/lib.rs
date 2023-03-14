@@ -358,8 +358,7 @@ impl InterfaceGenerator<'_> {
                     use wit_bindgen::rt::{{alloc, vec::Vec, string::String}};
 
                     #[repr(align({align}))]
-                    struct _RetArea([u8; {size}]);
-                    static mut _RET_AREA: _RetArea = _RetArea([0; {size}]);
+                    pub struct RetArea(pub [u8; {size}]);
                 ",
                 align = self.return_pointer_area_align,
                 size = self.return_pointer_area_size,
@@ -377,6 +376,7 @@ impl InterfaceGenerator<'_> {
             "
                 #[allow(clippy::all)]
                 pub mod {snake} {{
+                    use super::*;
                     {module}
                 }}
             "
@@ -922,7 +922,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
         } else {
             self.gen.return_pointer_area_size = self.gen.return_pointer_area_size.max(size);
             self.gen.return_pointer_area_align = self.gen.return_pointer_area_align.max(align);
-            uwriteln!(self.src, "let ptr{tmp} = _RET_AREA.0.as_mut_ptr() as i32;");
+            uwriteln!(self.src, "let ptr{tmp} = get_ret_area();");
         }
         format!("ptr{}", tmp)
     }
@@ -1281,7 +1281,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                 let name = self.gen.type_path(*ty, true);
                 for (i, case) in enum_.cases.iter().enumerate() {
                     let case = case.name.to_upper_camel_case();
-                    result.push_str(&format!("{name}::{case} => {i},\n"));
+                    result.push_str(&format!("{name}::{case} => hint::black_box({i}),\n"));
                 }
                 result.push_str("}");
                 results.push(result);
@@ -1427,7 +1427,8 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                     "if ptr.is_null()\n{{\nalloc::handle_alloc_error({layout});\n}}\nptr\n}}",
                 ));
                 self.push_str(&format!("else {{\ncore::ptr::null_mut()\n}};\n",));
-                self.push_str(&format!("for (i, e) in {vec}.into_iter().enumerate() {{\n",));
+                self.push_str(&format!("let mut e = {vec}.into_iter().enumerate();\n",));
+                self.push_str(&format!("while let Some((i, e)) = e.next() {{\n",));
                 self.push_str(&format!(
                     "let base = {result} as i32 + (i as i32) * {size};\n",
                 ));
@@ -1460,23 +1461,20 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                     "let {len} = {operand1};\n",
                     operand1 = operands[1]
                 ));
-                self.push_str(&format!(
-                    "let mut {result} = Vec::with_capacity({len} as usize);\n",
-                ));
 
-                self.push_str("for i in 0..");
+                self.push_str(&format!("let {result} = ",));
+
+                self.push_str("(0..");
                 self.push_str(&len);
-                self.push_str(" {\n");
+                self.push_str(").map(|i| {\n");
                 self.push_str("let base = ");
                 self.push_str(&base);
                 self.push_str(" + i *");
                 self.push_str(&size.to_string());
                 self.push_str(";\n");
-                self.push_str(&result);
-                self.push_str(".push(");
                 self.push_str(&body);
-                self.push_str(");\n");
-                self.push_str("}\n");
+                self.push_str("\n");
+                self.push_str("}).collect::<Vec<_>>();\n");
                 results.push(result);
                 self.push_str(&format!(
                     "wit_bindgen::rt::dealloc({base}, ({len} as usize) * {size}, {align});\n",
