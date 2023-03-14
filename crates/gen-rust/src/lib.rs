@@ -526,26 +526,28 @@ pub trait RustGenerator {
             }
             self.push_str("}\n");
 
-            self.push_str("impl");
-            self.print_generics(&info, lt, true);
-            self.push_str(" core::fmt::Debug for ");
-            self.push_str(&name);
-            self.print_generics(&info, lt, false);
-            self.push_str(" {\n");
-            self.push_str(
-                "fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {\n",
-            );
-            self.push_str(&format!("f.debug_struct(\"{}\")", name));
-            for field in record.fields.iter() {
-                self.push_str(&format!(
-                    ".field(\"{}\", &self.{})",
-                    field.name,
-                    to_rust_ident(&field.name)
-                ));
+            if false {
+                self.push_str("impl");
+                self.print_generics(&info, lt, true);
+                self.push_str(" core::fmt::Debug for ");
+                self.push_str(&name);
+                self.print_generics(&info, lt, false);
+                self.push_str(" {\n");
+                self.push_str(
+                    "fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {\n",
+                );
+                self.push_str(&format!("f.debug_struct(\"{}\")", name));
+                for field in record.fields.iter() {
+                    self.push_str(&format!(
+                        ".field(\"{}\", &self.{})",
+                        field.name,
+                        to_rust_ident(&field.name)
+                    ));
+                }
+                self.push_str(".finish()");
+                self.push_str("}\n");
+                self.push_str("}\n");
             }
-            self.push_str(".finish()");
-            self.push_str("}\n");
-            self.push_str("}\n");
         }
     }
 
@@ -654,34 +656,38 @@ pub trait RustGenerator {
     ) where
         Self: Sized,
     {
-        let info = self.info(id);
-        let lt = self.lifetime_for(&info, mode);
-        self.push_str("impl");
-        self.print_generics(&info, lt, true);
-        self.push_str(" core::fmt::Debug for ");
-        self.push_str(name);
-        self.print_generics(&info, lt, false);
-        self.push_str(" {\n");
-        self.push_str("fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {\n");
-        self.push_str("match self {\n");
-        for (case_name, payload) in cases {
+        if false {
+            let info = self.info(id);
+            let lt = self.lifetime_for(&info, mode);
+            self.push_str("impl");
+            self.print_generics(&info, lt, true);
+            self.push_str(" core::fmt::Debug for ");
             self.push_str(name);
-            self.push_str("::");
-            self.push_str(&case_name);
-            if *payload != Type::Unit {
-                self.push_str("(e)");
+            self.print_generics(&info, lt, false);
+            self.push_str(" {\n");
+            self.push_str(
+                "fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {\n",
+            );
+            self.push_str("match self {\n");
+            for (case_name, payload) in cases {
+                self.push_str(name);
+                self.push_str("::");
+                self.push_str(&case_name);
+                if *payload != Type::Unit {
+                    self.push_str("(e)");
+                }
+                self.push_str(" => {\n");
+                self.push_str(&format!("f.debug_tuple(\"{}::{}\")", name, case_name));
+                if *payload != Type::Unit {
+                    self.push_str(".field(e)");
+                }
+                self.push_str(".finish()\n");
+                self.push_str("}\n");
             }
-            self.push_str(" => {\n");
-            self.push_str(&format!("f.debug_tuple(\"{}::{}\")", name, case_name));
-            if *payload != Type::Unit {
-                self.push_str(".field(e)");
-            }
-            self.push_str(".finish()\n");
+            self.push_str("}\n");
+            self.push_str("}\n");
             self.push_str("}\n");
         }
-        self.push_str("}\n");
-        self.push_str("}\n");
-        self.push_str("}\n");
     }
 
     fn print_typedef_option(&mut self, iface: &Interface, id: TypeId, payload: &Type, docs: &Docs) {
@@ -742,7 +748,7 @@ pub trait RustGenerator {
 
         // Auto-synthesize an implementation of the standard `Error` trait for
         // error-looking types based on their name.
-        if is_error {
+        if false && is_error {
             self.push_str("impl ");
             self.push_str(&name);
             self.push_str("{\n");

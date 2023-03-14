@@ -128,11 +128,13 @@ pub unsafe trait LocalHandle: HandleType {
 
 #[doc(hidden)]
 pub mod rt {
+    #[cfg(feature = "realloc")]
     use std::alloc::{self, Layout};
 
     #[cfg(feature = "async")]
     pub use crate::futures::*;
 
+    #[cfg(feature = "realloc")]
     #[no_mangle]
     unsafe extern "C" fn canonical_abi_realloc(
         old_ptr: *mut u8,
@@ -157,6 +159,7 @@ pub mod rt {
         return ptr;
     }
 
+    #[cfg(feature = "realloc")]
     #[no_mangle]
     pub unsafe extern "C" fn canonical_abi_free(ptr: *mut u8, len: usize, align: usize) {
         if len == 0 {

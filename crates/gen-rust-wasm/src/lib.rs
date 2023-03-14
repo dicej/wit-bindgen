@@ -83,14 +83,6 @@ impl RustWasm {
             Direction::Import => AbiVariant::GuestImport,
         }
     }
-
-    fn ret_area_type_name(iface: &Interface) -> String {
-        format!("__{}RetArea", iface.name.to_camel_case())
-    }
-
-    fn ret_area_name(iface: &Interface) -> String {
-        format!("__{}_RET_AREA", iface.name.to_shouty_snake_case())
-    }
 }
 
 impl RustGenerator for RustWasm {
@@ -164,7 +156,10 @@ impl Generator for RustWasm {
 
         if !self.opts.standalone {
             self.src.push_str(&format!(
-                "#[allow(clippy::all)]\nmod {} {{\n",
+                "#[allow(clippy::all)]
+                 mod {} {{
+                     use super::*;
+                ",
                 iface.name.to_snake_case(),
             ));
         }
@@ -389,7 +384,7 @@ impl Generator for RustWasm {
         let name = &resource.name;
 
         self.rustdoc(&resource.docs);
-        self.src.push_str("#[derive(Debug)]\n");
+        //self.src.push_str("#[derive(Debug)]\n");
         self.src.push_str("#[repr(transparent)]\n");
         self.src
             .push_str(&format!("pub struct {}(i32);\n", name.to_camel_case()));
@@ -637,16 +632,13 @@ impl Generator for RustWasm {
         dst.push(mem::replace(&mut self.src, prev).into());
     }
 
-    fn finish_functions(&mut self, iface: &Interface, dir: Direction) {
+    fn finish_functions(&mut self, _iface: &Interface, dir: Direction) {
         if self.return_pointer_area_align > 0 {
             self.src.push_str(&format!(
                 "
                     #[repr(align({align}))]
-                    struct {ty}([u8; {size}]);
-                    static mut {name}: {ty} = {ty}([0; {size}]);
+                    pub struct RetArea(pub [u8; {size}]);
                 ",
-                ty = Self::ret_area_type_name(iface),
-                name = Self::ret_area_name(iface),
                 align = self.return_pointer_area_align,
                 size = self.return_pointer_area_size,
             ));
@@ -873,9 +865,9 @@ impl Bindgen for FunctionBindgen<'_> {
         let tmp = self.tmp();
 
         self.push_str(&format!(
-            "let ptr{} = {}.0.as_mut_ptr() as i32;\n",
+            "let ptr{} = {}_get_ret_area();\n",
             tmp,
-            RustWasm::ret_area_name(iface),
+            iface.name.to_snake_case(),
         ));
         format!("ptr{}", tmp)
     }
@@ -991,7 +983,7 @@ impl Bindgen for FunctionBindgen<'_> {
                         "match {} {{
                             0 => false,
                             1 => true,
-                            _ => panic!(\"invalid bool discriminant\"),
+                            _ => wasm32::unreachable(),
                         }}",
                         operands[0],
                     ));
@@ -1127,7 +1119,7 @@ impl Bindgen for FunctionBindgen<'_> {
                     result.push_str(&format!("{pat} => {name}::{case}{block},\n"));
                 }
                 if !unchecked {
-                    result.push_str("_ => panic!(\"invalid enum discriminant\"),\n");
+                    result.push_str("_ => wasm32::unreachable(),\n");
                 }
                 result.push_str("}");
                 results.push(result);
@@ -1181,7 +1173,7 @@ impl Bindgen for FunctionBindgen<'_> {
                     result.push_str(&format!("{pat} => {name}::{case_name}({block}),\n"));
                 }
                 if !unchecked {
-                    result.push_str("_ => panic!(\"invalid union discriminant\"),\n");
+                    result.push_str("_ => wasm32::unreachable(),\n");
                 }
                 result.push_str("}");
                 results.push(result);
@@ -1211,7 +1203,7 @@ impl Bindgen for FunctionBindgen<'_> {
                 let invalid = if unchecked {
                     "std::hint::unreachable_unchecked()"
                 } else {
-                    "panic!(\"invalid enum discriminant\")"
+                    "wasm32::unreachable()"
                 };
                 results.push(format!(
                     "match {operand} {{
@@ -1245,7 +1237,7 @@ impl Bindgen for FunctionBindgen<'_> {
                 let invalid = if unchecked {
                     "std::hint::unreachable_unchecked()"
                 } else {
-                    "panic!(\"invalid enum discriminant\")"
+                    "wasm32::unreachable()"
                 };
                 results.push(format!(
                     "match {operand} {{
@@ -1261,7 +1253,7 @@ impl Bindgen for FunctionBindgen<'_> {
                 let name = name.to_camel_case();
                 for (i, case) in enum_.cases.iter().enumerate() {
                     let case = case.name.to_camel_case();
-                    result.push_str(&format!("{name}::{case} => {i},\n"));
+                    result.push_str(&format!("{name}::{case} => hint::black_box({i}),\n"));
                 }
                 result.push_str("}");
                 results.push(result);
@@ -1289,7 +1281,7 @@ impl Bindgen for FunctionBindgen<'_> {
                     let case = case.name.to_camel_case();
                     result.push_str(&format!("{i} => {name}::{case},\n"));
                 }
-                result.push_str("_ => panic!(\"invalid enum discriminant\"),\n");
+                result.push_str("_ => wasm32::unreachable(),\n");
                 result.push_str("}");
                 results.push(result);
             }
@@ -1362,7 +1354,7 @@ impl Bindgen for FunctionBindgen<'_> {
                 if unchecked {
                     results.push(format!("String::from_utf8_unchecked({})", result));
                 } else {
-                    results.push(format!("String::from_utf8({}).unwrap()", result));
+                    results.push(format!("unwrap_result(String::from_utf8({}))", result));
                 }
             }
 
@@ -1390,7 +1382,8 @@ impl Bindgen for FunctionBindgen<'_> {
                     "if ptr.is_null()\n{{\nstd::alloc::handle_alloc_error({layout});\n}}\nptr\n}}",
                 ));
                 self.push_str(&format!("else {{\nstd::ptr::null_mut()\n}};\n",));
-                self.push_str(&format!("for (i, e) in {vec}.into_iter().enumerate() {{\n",));
+                self.push_str(&format!("let mut e = {vec}.into_iter().enumerate();\n",));
+                self.push_str(&format!("while let Some((i, e)) = e.next() {{\n",));
                 self.push_str(&format!(
                     "let base = {result} as i32 + (i as i32) * {size};\n",
                 ));
@@ -1426,23 +1419,19 @@ impl Bindgen for FunctionBindgen<'_> {
                     "let {len} = {operand1};\n",
                     operand1 = operands[1]
                 ));
-                self.push_str(&format!(
-                    "let mut {result} = Vec::with_capacity({len} as usize);\n",
-                ));
+                self.push_str(&format!("let {result} = ",));
 
-                self.push_str("for i in 0..");
+                self.push_str("(0..");
                 self.push_str(&len);
-                self.push_str(" {\n");
+                self.push_str(").map(|i| {\n");
                 self.push_str("let base = ");
                 self.push_str(&base);
                 self.push_str(" + i *");
                 self.push_str(&size.to_string());
                 self.push_str(";\n");
-                self.push_str(&result);
-                self.push_str(".push(");
                 self.push_str(&body);
-                self.push_str(");\n");
-                self.push_str("}\n");
+                self.push_str("\n");
+                self.push_str("}).collect::<Vec<_>>();\n");
                 results.push(result);
                 self.push_str(&format!(
                     "if {len} != 0 {{\nstd::alloc::dealloc({base} as *mut _, std::alloc::Layout::from_size_align_unchecked(({len} as usize) * {size}, {align}));\n}}\n",
