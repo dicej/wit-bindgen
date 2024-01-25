@@ -80,7 +80,6 @@ impl InterfaceGenerator<'_> {
         funcs: impl Iterator<Item = &'a Function> + Clone,
     ) -> Result<()> {
         let mut traits = BTreeMap::new();
-        let mut asyncified_traits = BTreeMap::new();
 
         for func in funcs {
             if self.gen.skip.contains(&func.name) {
@@ -93,34 +92,30 @@ impl InterfaceGenerator<'_> {
             self.generate_guest_export(func);
             self.src.push_str("};\n");
 
-            let info = |me: &mut Self, prefix| match func.kind {
+            // Next generate a trait signature for this method and insert it
+            // into `traits`. Note that `traits` will have a trait-per-resource.
+            let (trait_name, local_impl_name, export_key) = match func.kind {
                 FunctionKind::Freestanding => (
-                    format!("{prefix}Guest"),
-                    format!("_{prefix}GuestImpl"),
-                    me.export_key(None),
+                    format!("Guest"),
+                    format!("_GuestImpl"),
+                    self.export_key(None),
                 ),
                 FunctionKind::Method(id)
                 | FunctionKind::Constructor(id)
                 | FunctionKind::Static(id) => {
-                    let resource_name = me.resolve.types[id].name.as_deref().unwrap();
+                    let resource_name = self.resolve.types[id].name.as_deref().unwrap();
                     let camel = resource_name.to_upper_camel_case();
-                    let trait_name = format!("{prefix}Guest{camel}");
-                    let export_key = me.export_key(Some(&resource_name));
-                    let local_impl_name = format!("_{prefix}{camel}Impl");
+                    let trait_name = format!("Guest{camel}");
+                    let export_key = self.export_key(Some(&resource_name));
+                    let local_impl_name = format!("_{camel}Impl");
                     (trait_name, local_impl_name, export_key)
                 }
             };
 
-            // Next generate a trait signature for this method and insert it
-            // into `traits`. Note that `traits` will have a trait-per-resource.
-            let (trait_name, local_impl_name, export_key) = info(self, "");
-
-            let (_, _, methods, impls) = traits.entry(export_key).or_insert((
-                trait_name,
-                local_impl_name,
-                Vec::new(),
-                Vec::new(),
-            ));
+            let (_, _, methods) =
+                traits
+                    .entry(export_key)
+                    .or_insert((trait_name, local_impl_name, Vec::new()));
             let prev = mem::take(&mut self.src);
             let mut sig = FnSig {
                 use_item_name: true,
@@ -132,25 +127,11 @@ impl InterfaceGenerator<'_> {
                 sig.self_is_first_param = true;
             }
             self.print_signature(func, TypeMode::Owned, &sig);
-            self.src.push_str(";\n");
-            let trait_method = mem::replace(&mut self.src, prev);
-            methods.push(trait_method);
-
             if let Some(suffix) = self.gen.opts.asyncify.clone() {
-                let prev = mem::take(&mut self.src);
-                self.print_signature(func, TypeMode::Owned, &sig);
                 if func.name == format!("isyswasfa-poll{suffix}") {
                     self.src.push_str("{ isyswasfa_guest::poll(input) }\n");
                 } else if let Some(prefix) = func.name.strip_suffix("-isyswasfa") {
-                    let (trait_name, local_impl_name, export_key) = info(self, "Isyswasfa");
-
                     {
-                        let (_, _, methods) = asyncified_traits.entry(export_key).or_insert((
-                            trait_name.clone(),
-                            local_impl_name.clone(),
-                            Vec::new(),
-                        ));
-
                         let sig = FnSig {
                             async_: true,
                             ..sig.clone()
@@ -189,7 +170,7 @@ impl InterfaceGenerator<'_> {
 
                     uwriteln!(
                         self.src,
-                        "{{ isyswasfa_guest::first_poll(<{local_impl_name} as {trait_name}>::{}({params})) }}",
+                        "{{ isyswasfa_guest::first_poll(Self::{}({params})) }}",
                         to_rust_ident(prefix)
                     );
                 } else if func.name.ends_with("-isyswasfa-result") {
@@ -197,9 +178,11 @@ impl InterfaceGenerator<'_> {
                 } else {
                     unreachable!()
                 }
-                let impl_ = mem::replace(&mut self.src, prev);
-                impls.push(impl_);
+            } else {
+                self.src.push_str(";\n");
             }
+            let trait_method = mem::replace(&mut self.src, prev);
+            methods.push(trait_method);
         }
 
         // Once all the traits have been assembled then they can be emitted.
@@ -207,31 +190,7 @@ impl InterfaceGenerator<'_> {
         // Additionally alias the user-configured item for each trait here as
         // there's only one implementation of this trait and it must be
         // pre-configured.
-        for (export_key, (trait_name, local_impl_name, methods, impls)) in traits {
-            if self.gen.opts.asyncify.is_some() {
-                uwriteln!(self.src, "struct {local_impl_name};");
-                uwriteln!(self.src, "impl {trait_name} for {local_impl_name} {{",);
-                for impl_ in impls {
-                    self.src.push_str(&impl_);
-                }
-                uwriteln!(self.src, "}}");
-            } else {
-                let impl_name = self.gen.lookup_export(&export_key)?;
-                let path_to_root = self.path_to_root();
-                uwriteln!(
-                    self.src,
-                    "use {path_to_root}{impl_name} as {local_impl_name};"
-                );
-            }
-
-            uwriteln!(self.src, "pub trait {trait_name} {{");
-            for method in methods {
-                self.src.push_str(&method);
-            }
-            uwriteln!(self.src, "}}");
-        }
-
-        for (export_key, (trait_name, local_impl_name, methods)) in asyncified_traits {
+        for (export_key, (trait_name, local_impl_name, methods)) in traits {
             let impl_name = self.gen.lookup_export(&export_key)?;
             let path_to_root = self.path_to_root();
             uwriteln!(
@@ -239,7 +198,10 @@ impl InterfaceGenerator<'_> {
                 "use {path_to_root}{impl_name} as {local_impl_name};"
             );
 
-            uwriteln!(self.src, "#[async_trait(?Send)]\npub trait {trait_name} {{");
+            if self.gen.opts.asyncify.is_some() {
+                self.src.push_str("#[async_trait(?Self)]\n");
+            }
+            uwriteln!(self.src, "pub trait {trait_name} {{");
             for method in methods {
                 self.src.push_str(&method);
             }
