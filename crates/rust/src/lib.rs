@@ -178,6 +178,9 @@ pub struct Opts {
     /// Remapping of interface names to rust module names.
     #[cfg_attr(feature = "clap", arg(long, value_parser = parse_with, default_value = ""))]
     pub with: HashMap<String, String>,
+
+    #[cfg_attr(feature = "clap", arg(long))]
+    pub asyncify: Option<String>,
 }
 
 impl Opts {
@@ -262,6 +265,9 @@ impl RustWasm {
     }
 
     fn lookup_export(&self, key: &ExportKey) -> Result<String> {
+        if self.opts.asyncify.is_some() {
+            return Ok("Isyswasfa".to_owned());
+        }
         if let Some(key) = self.opts.exports.get(key) {
             return Ok(key.clone());
         }
@@ -509,6 +515,11 @@ impl WorldGenerator for RustWasm {
         );
 
         if self.opts.stubs {
+            if self.opts.asyncify.is_some() {
+                // this shouldn't be hard to implement, but isn't a priority at the moment:
+                todo!("stubs not yet supported in combination with asyncify");
+            }
+
             self.src.push_str("\n#[derive(Debug)]\npub struct Stub;\n");
             let world_id = world;
             let world = &resolve.worlds[world];
@@ -687,7 +698,7 @@ impl fmt::Display for Ownership {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct FnSig {
     async_: bool,
     unsafe_: bool,

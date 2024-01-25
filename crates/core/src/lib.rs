@@ -9,6 +9,8 @@ mod ns;
 pub use ns::Ns;
 pub mod source;
 pub use source::{Files, Source};
+pub mod asyncify;
+pub use asyncify::asyncify;
 
 #[derive(Default, Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Direction {

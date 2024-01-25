@@ -94,6 +94,15 @@ impl Parse for Config {
                             .collect()
                     }
                     Opt::With(with) => opts.with.extend(with),
+                    Opt::Asyncify(suffix) => {
+                        if opts.asyncify.is_some() {
+                            return Err(Error::new(
+                                suffix.span(),
+                                "cannot specify second asyncify suffix",
+                            ));
+                        }
+                        opts.asyncify = Some(suffix.value())
+                    }
                 }
             }
         } else {
@@ -107,6 +116,11 @@ impl Parse for Config {
         let world = resolve
             .select_world(pkg, world.as_deref())
             .map_err(|e| Error::new(call_site, format!("{e:?}")))?;
+        let (resolve, world) = if let Some(suffix) = opts.asyncify.as_deref() {
+            wit_bindgen_core::asyncify(&resolve, world, suffix)
+        } else {
+            (resolve, world)
+        };
         Ok(Config {
             opts,
             resolve,
@@ -186,6 +200,7 @@ mod kw {
     syn::custom_keyword!(export_prefix);
     syn::custom_keyword!(additional_derives);
     syn::custom_keyword!(with);
+    syn::custom_keyword!(asyncify);
 }
 
 #[derive(Clone)]
@@ -246,6 +261,7 @@ enum Opt {
     // Parse as paths so we can take the concrete types/macro names rather than raw strings
     AdditionalDerives(Vec<syn::Path>),
     With(HashMap<String, String>),
+    Asyncify(syn::LitStr),
 }
 
 impl Parse for Opt {
@@ -336,6 +352,10 @@ impl Parse for Opt {
             input.parse::<kw::export_prefix>()?;
             input.parse::<Token![:]>()?;
             Ok(Opt::ExportPrefix(input.parse()?))
+        } else if l.peek(kw::asyncify) {
+            input.parse::<kw::asyncify>()?;
+            input.parse::<Token![:]>()?;
+            Ok(Opt::Asyncify(input.parse()?))
         } else if l.peek(kw::additional_derives) {
             input.parse::<kw::additional_derives>()?;
             input.parse::<Token![:]>()?;

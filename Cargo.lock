@@ -2350,6 +2350,7 @@ name = "wit-bindgen-core"
 version = "0.16.0"
 dependencies = [
  "anyhow",
+ "indexmap",
  "wit-component",
  "wit-parser",
 ]
