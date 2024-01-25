@@ -176,7 +176,59 @@ impl InterfaceGenerator<'_> {
                 sig.self_is_first_param = true;
             }
             self.print_signature(func, true, &sig);
-            self.src.push_str(";\n");
+            if let Some(suffix) = self.gen.opts.isyswasfa.clone() {
+                if func.name == format!("isyswasfa-poll{suffix}") {
+                    self.src.push_str("{ isyswasfa_guest::poll(input) }\n");
+                } else if let Some(prefix) = func.name.strip_suffix("-isyswasfa-start") {
+                    let sig = FnSig {
+                        async_: true,
+                        ..sig.clone()
+                    };
+                    let func = &Function {
+                        name: prefix.into(),
+                        kind: func.kind.clone(),
+                        params: func.params.clone(),
+                        results: if let Results::Anon(Type::Id(id)) = &func.results {
+                            if let TypeDefKind::Result(Result_ { ok, .. }) =
+                                &self.resolve.types[*id].kind
+                            {
+                                ok.map(Results::Anon)
+                                    .unwrap_or_else(|| Results::Named(Vec::new()))
+                            } else {
+                                unreachable!()
+                            }
+                        } else {
+                            unreachable!()
+                        },
+                        docs: func.docs.clone(),
+                    };
+                    let prev = mem::take(&mut self.src);
+                    self.print_signature(func, true, &sig);
+                    self.src.push_str(";\n");
+
+                    let trait_method = mem::replace(&mut self.src, prev);
+                    methods.push(trait_method);
+
+                    let params = func
+                        .params
+                        .iter()
+                        .map(|(name, _)| to_rust_ident(name))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+
+                    uwriteln!(
+                        self.src,
+                        "{{ isyswasfa_guest::first_poll(Self::{}({params})) }}",
+                        to_rust_ident(func.item_name())
+                    );
+                } else if func.name.ends_with("-isyswasfa-result") {
+                    self.src.push_str("{ isyswasfa_guest::get_ready(ready) }");
+                } else {
+                    self.src.push_str(";\n");
+                }
+            } else {
+                self.src.push_str(";\n");
+            }
             let trait_method = mem::replace(&mut self.src, prev);
             methods.push(trait_method);
         }
@@ -193,6 +245,9 @@ impl InterfaceGenerator<'_> {
         }
 
         for (resource, (trait_name, methods)) in traits.iter() {
+            if self.gen.opts.isyswasfa.is_some() {
+                self.src.push_str("#[async_trait::async_trait(?Send)]\n");
+            }
             uwriteln!(self.src, "pub trait {trait_name}: 'static {{");
             let resource = resource.unwrap();
             let resource_name = self.resolve.types[resource].name.as_ref().unwrap();
@@ -340,6 +395,9 @@ macro_rules! {macro_name} {{
         methods: &[Source],
         resource_traits: impl Iterator<Item = (TypeId, &'a str)>,
     ) {
+        if self.gen.opts.isyswasfa.is_some() {
+            self.src.push_str("#[async_trait::async_trait(?Send)]\n");
+        }
         uwriteln!(self.src, "pub trait {trait_name} {{");
         for (id, trait_name) in resource_traits {
             let name = self.resolve.types[id]
@@ -503,6 +561,70 @@ macro_rules! {macro_name} {{
 
         self.src.push_str("}\n");
         self.src.push_str("}\n");
+
+        if self.gen.opts.isyswasfa.is_some() {
+            if let Some(prefix) = func.name.strip_suffix("-isyswasfa-start") {
+                sig.async_ = true;
+                self.src.push_str("#[allow(unused_unsafe, clippy::all)]\n");
+                self.print_signature(
+                    &Function {
+                        name: prefix.into(),
+                        kind: func.kind.clone(),
+                        params: func.params.clone(),
+                        results: if let Results::Anon(Type::Id(id)) = &func.results {
+                            if let TypeDefKind::Result(Result_ { ok, .. }) =
+                                &self.resolve.types[*id].kind
+                            {
+                                ok.map(Results::Anon)
+                                    .unwrap_or_else(|| Results::Named(Vec::new()))
+                            } else {
+                                unreachable!()
+                            }
+                        } else {
+                            unreachable!()
+                        },
+                        docs: func.docs.clone(),
+                    },
+                    false,
+                    &sig,
+                );
+
+                let params = func
+                    .params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (name, _))| {
+                        if i == 0 && sig.self_is_first_param {
+                            "self"
+                        } else {
+                            name
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                let isyswasfa = to_rust_ident(&func.item_name().strip_suffix("-start").unwrap());
+                let isyswasfa = match func.kind {
+                    FunctionKind::Freestanding => isyswasfa,
+                    FunctionKind::Method(_)
+                    | FunctionKind::Static(_)
+                    | FunctionKind::Constructor(_) => format!("Self::{isyswasfa}"),
+                };
+                let isyswasfa_result = &format!("{isyswasfa}_result");
+
+                uwrite!(
+                    self.src,
+                    "
+                    {{
+                        match {isyswasfa}_start({params}) {{
+                            Ok(result) => result,
+                            Err(pending) => {isyswasfa_result}(isyswasfa_guest::await_ready(pending).await),
+                        }}
+                    }}
+                    "
+                );
+            }
+        }
 
         match func.kind {
             FunctionKind::Freestanding => {}

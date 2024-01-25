@@ -22,3 +22,4 @@ quote = "1"
 wit-bindgen-core = { workspace = true }
 wit-bindgen-rust = { workspace = true }
 anyhow = { workspace = true }
+isyswasfa-transform = { workspace = true }

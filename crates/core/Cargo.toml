@@ -17,3 +17,5 @@ doctest = false
 [dependencies]
 wit-parser = { workspace = true }
 anyhow = { workspace = true }
+wit-component = { workspace = true }
+indexmap = { workspace = true }

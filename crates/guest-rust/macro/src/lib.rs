@@ -113,6 +113,15 @@ impl Parse for Config {
                     Opt::PubExportMacro(enable) => {
                         opts.pub_export_macro = enable.value();
                     }
+                    Opt::Isyswasfa(suffix) => {
+                        if opts.isyswasfa.is_some() {
+                            return Err(Error::new(
+                                suffix.span(),
+                                "cannot specify second isyswasfa suffix",
+                            ));
+                        }
+                        opts.isyswasfa = Some(suffix.value())
+                    }
                 }
             }
         } else {
@@ -121,11 +130,14 @@ impl Parse for Config {
                 source = Some(Source::Path(input.parse::<syn::LitStr>()?.value()));
             }
         }
-        let (resolve, pkg, files) =
+        let (mut resolve, pkg, files) =
             parse_source(&source).map_err(|err| anyhow_to_syn(call_site, err))?;
         let world = resolve
             .select_world(pkg, world.as_deref())
             .map_err(|e| anyhow_to_syn(call_site, e))?;
+        if let Some(suffix) = opts.isyswasfa.as_deref() {
+            isyswasfa_transform::transform(&mut resolve, world, Some(suffix))
+        }
         Ok(Config {
             opts,
             resolve,
@@ -231,6 +243,7 @@ mod kw {
     syn::custom_keyword!(default_bindings_module);
     syn::custom_keyword!(export_macro_name);
     syn::custom_keyword!(pub_export_macro);
+    syn::custom_keyword!(isyswasfa);
 }
 
 #[derive(Clone)]
@@ -280,6 +293,7 @@ enum Opt {
     DefaultBindingsModule(syn::LitStr),
     ExportMacroName(syn::LitStr),
     PubExportMacro(syn::LitBool),
+    Isyswasfa(syn::LitStr),
 }
 
 impl Parse for Opt {
@@ -363,6 +377,10 @@ impl Parse for Opt {
             input.parse::<kw::export_prefix>()?;
             input.parse::<Token![:]>()?;
             Ok(Opt::ExportPrefix(input.parse()?))
+        } else if l.peek(kw::isyswasfa) {
+            input.parse::<kw::isyswasfa>()?;
+            input.parse::<Token![:]>()?;
+            Ok(Opt::Isyswasfa(input.parse()?))
         } else if l.peek(kw::additional_derives) {
             input.parse::<kw::additional_derives>()?;
             input.parse::<Token![:]>()?;

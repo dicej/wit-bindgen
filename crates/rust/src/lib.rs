@@ -182,10 +182,28 @@ pub struct Opts {
     /// candidate for being exported outside of the crate.
     #[cfg_attr(feature = "clap", arg(long))]
     pub pub_export_macro: bool,
+
+    #[cfg_attr(feature = "clap", arg(long))]
+    pub isyswasfa: Option<String>,
 }
 
 impl Opts {
-    pub fn build(self) -> Box<dyn WorldGenerator> {
+    pub fn build(mut self) -> Box<dyn WorldGenerator> {
+        if self.isyswasfa.is_some() {
+            self.with.push((
+                "isyswasfa:isyswasfa/isyswasfa".into(),
+                "::isyswasfa_guest::isyswasfa_interface".into(),
+            ));
+            self.with.push((
+                "wasi:io/poll@0.2.0".into(),
+                "::isyswasfa_guest::poll_interface".into(),
+            ));
+            self.with.push((
+                "wasi:io/streams@0.2.0".into(),
+                "::isyswasfa_guest::streams_interface".into(),
+            ));
+        }
+
         let mut r = RustWasm::new();
         r.skip = self.skip.iter().cloned().collect();
         r.opts = self;
@@ -885,14 +903,14 @@ impl WorldGenerator for RustWasm {
             true,
         );
         let (snake, module_path) = gen.start_append_submodule(name);
-        if gen.gen.name_interface(resolve, id, name, false) {
-            return;
-        }
+        let remapped = gen.gen.name_interface(resolve, id, name, false);
         gen.types(id);
 
-        gen.generate_imports(resolve.interfaces[id].functions.values());
+        if !remapped {
+            gen.generate_imports(resolve.interfaces[id].functions.values());
 
-        gen.finish_append_submodule(&snake, module_path);
+            gen.finish_append_submodule(&snake, module_path);
+        }
     }
 
     fn import_funcs(
@@ -922,9 +940,7 @@ impl WorldGenerator for RustWasm {
         self.interface_last_seen_as_import.insert(id, false);
         let mut gen = self.interface(Identifier::Interface(id, name), None, resolve, false);
         let (snake, module_path) = gen.start_append_submodule(name);
-        if gen.gen.name_interface(resolve, id, name, true) {
-            return Ok(());
-        }
+        let remapped = gen.gen.name_interface(resolve, id, name, true);
         gen.types(id);
         let macro_name =
             gen.generate_exports(Some((id, name)), resolve.interfaces[id].functions.values())?;
@@ -1057,6 +1073,11 @@ impl WorldGenerator for RustWasm {
         );
 
         if self.opts.stubs {
+            if self.opts.isyswasfa.is_some() {
+                // this shouldn't be hard to implement, but isn't a priority at the moment:
+                todo!("stubs not yet supported in combination with isyswasfa");
+            }
+
             self.src.push_str("\n#[derive(Debug)]\npub struct Stub;\n");
         }
 
@@ -1090,14 +1111,16 @@ impl WorldGenerator for RustWasm {
 
         let remapping_keys = self.with.keys().cloned().collect::<HashSet<String>>();
 
-        let mut unused_keys = remapping_keys
-            .difference(&self.used_with_opts)
-            .collect::<Vec<&String>>();
+        if self.opts.isyswasfa.is_none() {
+            let mut unused_keys = remapping_keys
+                .difference(&self.used_with_opts)
+                .collect::<Vec<&String>>();
 
-        unused_keys.sort();
+            unused_keys.sort();
 
-        if !unused_keys.is_empty() {
-            bail!("unused remappings provided via `with`: {unused_keys:?}");
+            if !unused_keys.is_empty() {
+                bail!("unused remappings provided via `with`: {unused_keys:?}");
+            }
         }
 
         Ok(())
@@ -1198,7 +1221,7 @@ impl fmt::Display for Ownership {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct FnSig {
     async_: bool,
     unsafe_: bool,

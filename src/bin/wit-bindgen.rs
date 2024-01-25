@@ -91,22 +91,25 @@ struct Common {
 
 fn main() -> Result<()> {
     let mut files = Files::default();
-    let (generator, opt) = match Opt::parse() {
+    let (generator, opt, isyswasfa) = match Opt::parse() {
         #[cfg(feature = "markdown")]
-        Opt::Markdown { opts, args } => (opts.build(), args),
+        Opt::Markdown { opts, args } => (opts.build(), args, None),
         #[cfg(feature = "c")]
-        Opt::C { opts, args } => (opts.build(), args),
+        Opt::C { opts, args } => (opts.build(), args, None),
         #[cfg(feature = "rust")]
-        Opt::Rust { opts, args } => (opts.build(), args),
+        Opt::Rust { opts, args } => {
+            let isyswasfa = opts.isyswasfa.clone();
+            (opts.build(), args, isyswasfa)
+        }
         #[cfg(feature = "teavm-java")]
-        Opt::TeavmJava { opts, args } => (opts.build(), args),
+        Opt::TeavmJava { opts, args } => (opts.build(), args, None),
         #[cfg(feature = "go")]
-        Opt::TinyGo { opts, args } => (opts.build(), args),
+        Opt::TinyGo { opts, args } => (opts.build(), args, None),
         #[cfg(feature = "csharp")]
-        Opt::CSharp { opts, args } => (opts.build(), args),
+        Opt::CSharp { opts, args } => (opts.build(), args, None),
     };
 
-    gen_world(generator, &opt, &mut files)?;
+    gen_world(generator, &opt, &mut files, isyswasfa)?;
 
     for (name, contents) in files.iter() {
         let dst = match &opt.out_dir {
@@ -153,12 +156,17 @@ fn gen_world(
     mut generator: Box<dyn WorldGenerator>,
     opts: &Common,
     files: &mut Files,
+    isyswasfa: Option<String>,
 ) -> Result<()> {
     let mut resolve = Resolve::default();
     let (pkg, _files) = resolve.push_path(&opts.wit)?;
     let world = resolve.select_world(pkg, opts.world.as_deref())?;
+    let (resolve, world) = if let Some(suffix) = isyswasfa.as_deref() {
+        isyswasfa_transform::transform(&resolve, world, Some(suffix))
+    } else {
+        (resolve, world)
+    };
     generator.generate(&resolve, world, files)?;
-
     Ok(())
 }
 
