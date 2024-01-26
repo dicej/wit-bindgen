@@ -853,6 +853,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f518f335dce6725a761382244631d86cf0ccb2863413590b31338feb467f9c3"
 
 [[package]]
+name = "isyswasfa-transform"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "wit-parser",
+]
+
+[[package]]
 name = "itertools"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2329,6 +2337,7 @@ dependencies = [
  "anyhow",
  "clap",
  "heck",
+ "isyswasfa-transform",
  "test-artifacts",
  "wasm-encoder 0.39.0",
  "wasmparser 0.118.1",

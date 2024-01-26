@@ -127,7 +127,7 @@ impl InterfaceGenerator<'_> {
                 sig.self_is_first_param = true;
             }
             self.print_signature(func, TypeMode::Owned, &sig);
-            if let Some(suffix) = self.gen.opts.asyncify.clone() {
+            if let Some(suffix) = self.gen.opts.isyswasfa.clone() {
                 if func.name == format!("isyswasfa-poll{suffix}") {
                     self.src.push_str("{ isyswasfa_guest::poll(input) }\n");
                 } else if let Some(prefix) = func.name.strip_suffix("-isyswasfa") {
@@ -191,14 +191,22 @@ impl InterfaceGenerator<'_> {
         // there's only one implementation of this trait and it must be
         // pre-configured.
         for (export_key, (trait_name, local_impl_name, methods)) in traits {
-            let impl_name = self.gen.lookup_export(&export_key)?;
-            let path_to_root = self.path_to_root();
-            uwriteln!(
-                self.src,
-                "use {path_to_root}{impl_name} as {local_impl_name};"
-            );
+            if self.gen.opts.isyswasfa.is_some()
+                && matches!(export_key, ExportKey::World)
+                && methods.len() == 1
+            {
+                uwriteln!(self.src, "struct {local_impl_name};");
+                uwriteln!(self.src, "impl {trait_name} for {local_impl_name} {{}}");
+            } else {
+                let impl_name = self.gen.lookup_export(&export_key)?;
+                let path_to_root = self.path_to_root();
+                uwriteln!(
+                    self.src,
+                    "use {path_to_root}{impl_name} as {local_impl_name};"
+                );
+            }
 
-            if self.gen.opts.asyncify.is_some() {
+            if self.gen.opts.isyswasfa.is_some() {
                 self.src.push_str("#[async_trait(?Self)]\n");
             }
             uwriteln!(self.src, "pub trait {trait_name} {{");
@@ -363,7 +371,7 @@ impl InterfaceGenerator<'_> {
         self.src.push_str("}\n");
         self.src.push_str("}\n");
 
-        if self.gen.opts.asyncify.is_some() {
+        if self.gen.opts.isyswasfa.is_some() {
             if let Some(prefix) = func.name.strip_suffix("-isyswasfa") {
                 sig.async_ = true;
                 self.src.push_str("#[allow(unused_unsafe, clippy::all)]\n");

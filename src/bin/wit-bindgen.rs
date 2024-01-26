@@ -91,15 +91,15 @@ struct Common {
 
 fn main() -> Result<()> {
     let mut files = Files::default();
-    let (generator, opt, asyncify) = match Opt::parse() {
+    let (generator, opt, isyswasfa) = match Opt::parse() {
         #[cfg(feature = "markdown")]
         Opt::Markdown { opts, args } => (opts.build(), args, None),
         #[cfg(feature = "c")]
         Opt::C { opts, args } => (opts.build(), args, None),
         #[cfg(feature = "rust")]
         Opt::Rust { opts, args } => {
-            let asyncify = opts.asyncify.clone();
-            (opts.build(), args, asyncify)
+            let isyswasfa = opts.isyswasfa.clone();
+            (opts.build(), args, isyswasfa)
         }
         #[cfg(feature = "teavm-java")]
         Opt::TeavmJava { opts, args } => (opts.build(), args, None),
@@ -109,7 +109,7 @@ fn main() -> Result<()> {
         Opt::CSharp { opts, args } => (opts.build(), args, None),
     };
 
-    gen_world(generator, &opt, &mut files, asyncify)?;
+    gen_world(generator, &opt, &mut files, isyswasfa)?;
 
     for (name, contents) in files.iter() {
         let dst = match &opt.out_dir {
@@ -156,7 +156,7 @@ fn gen_world(
     mut generator: Box<dyn WorldGenerator>,
     opts: &Common,
     files: &mut Files,
-    asyncify: Option<String>,
+    isyswasfa: Option<String>,
 ) -> Result<()> {
     let mut resolve = Resolve::default();
     let pkg = if opts.wit.is_dir() {
@@ -165,8 +165,8 @@ fn gen_world(
         resolve.push(UnresolvedPackage::parse_file(&opts.wit)?)?
     };
     let world = resolve.select_world(pkg, opts.world.as_deref())?;
-    let (resolve, world) = if let Some(suffix) = asyncify.as_deref() {
-        wit_bindgen_core::asyncify(&resolve, world, suffix)
+    let (resolve, world) = if let Some(suffix) = isyswasfa.as_deref() {
+        isyswasfa_transform::transform(&resolve, world, Some(suffix))
     } else {
         (resolve, world)
     };

@@ -180,7 +180,7 @@ pub struct Opts {
     pub with: HashMap<String, String>,
 
     #[cfg_attr(feature = "clap", arg(long))]
-    pub asyncify: Option<String>,
+    pub isyswasfa: Option<String>,
 }
 
 impl Opts {
@@ -265,7 +265,7 @@ impl RustWasm {
     }
 
     fn lookup_export(&self, key: &ExportKey) -> Result<String> {
-        if self.opts.asyncify.is_some() {
+        if self.opts.isyswasfa.is_some() {
             return Ok("Isyswasfa".to_owned());
         }
         if let Some(key) = self.opts.exports.get(key) {
@@ -515,9 +515,9 @@ impl WorldGenerator for RustWasm {
         );
 
         if self.opts.stubs {
-            if self.opts.asyncify.is_some() {
+            if self.opts.isyswasfa.is_some() {
                 // this shouldn't be hard to implement, but isn't a priority at the moment:
-                todo!("stubs not yet supported in combination with asyncify");
+                todo!("stubs not yet supported in combination with isyswasfa");
             }
 
             self.src.push_str("\n#[derive(Debug)]\npub struct Stub;\n");
