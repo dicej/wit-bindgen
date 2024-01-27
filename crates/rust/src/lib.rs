@@ -184,7 +184,14 @@ pub struct Opts {
 }
 
 impl Opts {
-    pub fn build(self) -> Box<dyn WorldGenerator> {
+    pub fn build(mut self) -> Box<dyn WorldGenerator> {
+        if self.isyswasfa.is_some() {
+            self.with.insert(
+                "isyswasfa:isyswasfa/isyswasfa".into(),
+                "::isyswasfa_guest::interface".into(),
+            );
+        }
+
         let mut r = RustWasm::new();
         r.skip = self.skip.iter().cloned().collect();
         r.opts = self;
@@ -265,9 +272,6 @@ impl RustWasm {
     }
 
     fn lookup_export(&self, key: &ExportKey) -> Result<String> {
-        if self.opts.isyswasfa.is_some() {
-            return Ok("Isyswasfa".to_owned());
-        }
         if let Some(key) = self.opts.exports.get(key) {
             return Ok(key.clone());
         }
@@ -382,14 +386,14 @@ impl WorldGenerator for RustWasm {
             true,
         );
         let (snake, module_path) = gen.start_append_submodule(name);
-        if gen.gen.name_interface(resolve, id, name, false) {
-            return;
-        }
+        let remapped = gen.gen.name_interface(resolve, id, name, false);
         gen.types(id);
 
-        gen.generate_imports(resolve.interfaces[id].functions.values());
+        if !remapped {
+            gen.generate_imports(resolve.interfaces[id].functions.values());
 
-        gen.finish_append_submodule(&snake, module_path);
+            gen.finish_append_submodule(&snake, module_path);
+        }
     }
 
     fn import_funcs(
@@ -418,12 +422,12 @@ impl WorldGenerator for RustWasm {
     ) -> Result<()> {
         let mut gen = self.interface(Identifier::Interface(id, name), None, resolve, false);
         let (snake, module_path) = gen.start_append_submodule(name);
-        if gen.gen.name_interface(resolve, id, name, true) {
-            return Ok(());
-        }
+        let remapped = gen.gen.name_interface(resolve, id, name, true);
         gen.types(id);
-        gen.generate_exports(resolve.interfaces[id].functions.values())?;
-        gen.finish_append_submodule(&snake, module_path);
+        if !remapped {
+            gen.generate_exports(resolve.interfaces[id].functions.values())?;
+            gen.finish_append_submodule(&snake, module_path);
+        }
         Ok(())
     }
 

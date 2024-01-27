@@ -174,9 +174,9 @@ impl InterfaceGenerator<'_> {
                         to_rust_ident(prefix)
                     );
                 } else if func.name.ends_with("-isyswasfa-result") {
-                    self.src.push_str("{ isyswasfa_guest::get_ready(ready)) }");
+                    self.src.push_str("{ isyswasfa_guest::get_ready(ready) }");
                 } else {
-                    unreachable!()
+                    self.src.push_str(";\n");
                 }
             } else {
                 self.src.push_str(";\n");
@@ -207,7 +207,7 @@ impl InterfaceGenerator<'_> {
             }
 
             if self.gen.opts.isyswasfa.is_some() {
-                self.src.push_str("#[async_trait(?Self)]\n");
+                self.src.push_str("#[async_trait::async_trait(?Send)]\n");
             }
             uwriteln!(self.src, "pub trait {trait_name} {{");
             for method in methods {
@@ -411,10 +411,12 @@ impl InterfaceGenerator<'_> {
                 uwrite!(
                     self.src,
                     "
+                    {{
                         match {isyswasfa}({params}) {{
                             Ok(result) => result,
                             Err(pending) => {isyswasfa_result}(isyswasfa_guest::await_ready(pending).await),
                         }}
+                    }}
                     "
                 );
             }
