@@ -111,16 +111,14 @@ impl Parse for Config {
                 source = Some(Source::Path(input.parse::<syn::LitStr>()?.value()));
             }
         }
-        let (resolve, pkg, files) =
+        let (mut resolve, pkg, files) =
             parse_source(&source).map_err(|err| Error::new(call_site, format!("{err:?}")))?;
         let world = resolve
             .select_world(pkg, world.as_deref())
             .map_err(|e| Error::new(call_site, format!("{e:?}")))?;
-        let (resolve, world) = if let Some(suffix) = opts.isyswasfa.as_deref() {
-            isyswasfa_transform::transform(&resolve, world, Some(suffix))
-        } else {
-            (resolve, world)
-        };
+        if let Some(suffix) = opts.isyswasfa.as_deref() {
+            isyswasfa_transform::transform(&mut resolve, world, Some(suffix))
+        }
         Ok(Config {
             opts,
             resolve,

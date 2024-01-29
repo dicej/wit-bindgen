@@ -131,35 +131,34 @@ impl InterfaceGenerator<'_> {
                 if func.name == format!("isyswasfa-poll{suffix}") {
                     self.src.push_str("{ isyswasfa_guest::poll(input) }\n");
                 } else if let Some(prefix) = func.name.strip_suffix("-isyswasfa") {
-                    {
-                        let sig = FnSig {
-                            async_: true,
-                            ..sig.clone()
-                        };
-                        let func = &Function {
-                            name: prefix.into(),
-                            kind: func.kind.clone(),
-                            params: func.params.clone(),
-                            results: if let Results::Anon(Type::Id(id)) = &func.results {
-                                if let TypeDefKind::Result(Result_ { ok: Some(ok), .. }) =
-                                    &self.resolve.types[*id].kind
-                                {
-                                    Results::Anon(*ok)
-                                } else {
-                                    unreachable!()
-                                }
+                    let sig = FnSig {
+                        async_: true,
+                        ..sig.clone()
+                    };
+                    let func = &Function {
+                        name: prefix.into(),
+                        kind: func.kind.clone(),
+                        params: func.params.clone(),
+                        results: if let Results::Anon(Type::Id(id)) = &func.results {
+                            if let TypeDefKind::Result(Result_ { ok, .. }) =
+                                &self.resolve.types[*id].kind
+                            {
+                                ok.map(|ok| Results::Anon(ok))
+                                    .unwrap_or_else(|| Results::Named(Vec::new()))
                             } else {
                                 unreachable!()
-                            },
-                            docs: func.docs.clone(),
-                        };
-                        let prev = mem::take(&mut self.src);
-                        self.print_signature(func, TypeMode::Owned, &sig);
-                        self.src.push_str(";\n");
+                            }
+                        } else {
+                            unreachable!()
+                        },
+                        docs: func.docs.clone(),
+                    };
+                    let prev = mem::take(&mut self.src);
+                    self.print_signature(func, TypeMode::Owned, &sig);
+                    self.src.push_str(";\n");
 
-                        let trait_method = mem::replace(&mut self.src, prev);
-                        methods.push(trait_method);
-                    }
+                    let trait_method = mem::replace(&mut self.src, prev);
+                    methods.push(trait_method);
 
                     let params = func
                         .params
@@ -171,7 +170,7 @@ impl InterfaceGenerator<'_> {
                     uwriteln!(
                         self.src,
                         "{{ isyswasfa_guest::first_poll(Self::{}({params})) }}",
-                        to_rust_ident(prefix)
+                        to_rust_ident(func.item_name())
                     );
                 } else if func.name.ends_with("-isyswasfa-result") {
                     self.src.push_str("{ isyswasfa_guest::get_ready(ready) }");
@@ -382,10 +381,11 @@ impl InterfaceGenerator<'_> {
                             kind: func.kind.clone(),
                             params: func.params.clone(),
                             results: if let Results::Anon(Type::Id(id)) = &func.results {
-                                if let TypeDefKind::Result(Result_ { ok: Some(ok), .. }) =
+                                if let TypeDefKind::Result(Result_ { ok, .. }) =
                                     &self.resolve.types[*id].kind
                                 {
-                                    Results::Anon(*ok)
+                                    ok.map(|ok| Results::Anon(ok))
+                                        .unwrap_or_else(|| Results::Named(Vec::new()))
                                 } else {
                                     unreachable!()
                                 }
@@ -399,7 +399,7 @@ impl InterfaceGenerator<'_> {
                     )
                     .join(", ");
 
-                let isyswasfa = to_rust_ident(&func.name);
+                let isyswasfa = to_rust_ident(&func.item_name());
                 let isyswasfa = match func.kind {
                     FunctionKind::Freestanding => isyswasfa,
                     FunctionKind::Method(_)
