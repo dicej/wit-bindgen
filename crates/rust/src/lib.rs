@@ -188,7 +188,11 @@ impl Opts {
         if self.isyswasfa.is_some() {
             self.with.insert(
                 "isyswasfa:isyswasfa/isyswasfa".into(),
-                "::isyswasfa_guest::interface".into(),
+                "::isyswasfa_guest::isyswasfa_interface".into(),
+            );
+            self.with.insert(
+                "wasi:io/poll@0.2.0".into(),
+                "::isyswasfa_guest::poll_interface".into(),
             );
         }
 
