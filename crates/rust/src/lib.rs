@@ -194,6 +194,10 @@ impl Opts {
                 "wasi:io/poll@0.2.0".into(),
                 "::isyswasfa_guest::poll_interface".into(),
             );
+            self.with.insert(
+                "wasi:io/streams@0.2.0".into(),
+                "::isyswasfa_guest::streams_interface".into(),
+            );
         }
 
         let mut r = RustWasm::new();
