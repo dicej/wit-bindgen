@@ -130,7 +130,7 @@ impl InterfaceGenerator<'_> {
             if let Some(suffix) = self.gen.opts.isyswasfa.clone() {
                 if func.name == format!("isyswasfa-poll{suffix}") {
                     self.src.push_str("{ isyswasfa_guest::poll(input) }\n");
-                } else if let Some(prefix) = func.name.strip_suffix("-isyswasfa") {
+                } else if let Some(prefix) = func.name.strip_suffix("-isyswasfa-start") {
                     let sig = FnSig {
                         async_: true,
                         ..sig.clone()
@@ -371,7 +371,7 @@ impl InterfaceGenerator<'_> {
         self.src.push_str("}\n");
 
         if self.gen.opts.isyswasfa.is_some() {
-            if let Some(prefix) = func.name.strip_suffix("-isyswasfa") {
+            if let Some(prefix) = func.name.strip_suffix("-isyswasfa-start") {
                 sig.async_ = true;
                 self.src.push_str("#[allow(unused_unsafe, clippy::all)]\n");
                 let params = self
@@ -399,7 +399,7 @@ impl InterfaceGenerator<'_> {
                     )
                     .join(", ");
 
-                let isyswasfa = to_rust_ident(&func.item_name());
+                let isyswasfa = to_rust_ident(&func.item_name().strip_suffix("-start").unwrap());
                 let isyswasfa = match func.kind {
                     FunctionKind::Freestanding => isyswasfa,
                     FunctionKind::Method(_)
@@ -412,7 +412,7 @@ impl InterfaceGenerator<'_> {
                     self.src,
                     "
                     {{
-                        match {isyswasfa}({params}) {{
+                        match {isyswasfa}_start({params}) {{
                             Ok(result) => result,
                             Err(pending) => {isyswasfa_result}(isyswasfa_guest::await_ready(pending).await),
                         }}
