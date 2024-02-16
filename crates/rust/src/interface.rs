@@ -130,7 +130,7 @@ impl InterfaceGenerator<'_> {
             if let Some(suffix) = self.gen.opts.isyswasfa.clone() {
                 if func.name == format!("isyswasfa-poll{suffix}") {
                     self.src.push_str("{ isyswasfa_guest::poll(input) }\n");
-                } else if let Some(prefix) = func.name.strip_suffix("-isyswasfa") {
+                } else if let Some(prefix) = func.name.strip_suffix("-isyswasfa-start") {
                     let sig = FnSig {
                         async_: true,
                         ..sig.clone()
@@ -371,7 +371,7 @@ impl InterfaceGenerator<'_> {
         self.src.push_str("}\n");
 
         if self.gen.opts.isyswasfa.is_some() {
-            if let Some(prefix) = func.name.strip_suffix("-isyswasfa") {
+            if let Some(prefix) = func.name.strip_suffix("-isyswasfa-start") {
                 sig.async_ = true;
                 self.src.push_str("#[allow(unused_unsafe, clippy::all)]\n");
                 let params = self
