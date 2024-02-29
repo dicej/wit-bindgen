@@ -399,7 +399,7 @@ impl InterfaceGenerator<'_> {
                     )
                     .join(", ");
 
-                let isyswasfa = to_rust_ident(&func.item_name());
+                let isyswasfa = to_rust_ident(&func.item_name().strip_suffix("-start").unwrap());
                 let isyswasfa = match func.kind {
                     FunctionKind::Freestanding => isyswasfa,
                     FunctionKind::Method(_)
@@ -412,7 +412,7 @@ impl InterfaceGenerator<'_> {
                     self.src,
                     "
                     {{
-                        match {isyswasfa}({params}) {{
+                        match {isyswasfa}_start({params}) {{
                             Ok(result) => result,
                             Err(pending) => {isyswasfa_result}(isyswasfa_guest::await_ready(pending).await),
                         }}
