@@ -143,7 +143,7 @@ impl InterfaceGenerator<'_> {
                             if let TypeDefKind::Result(Result_ { ok, .. }) =
                                 &self.resolve.types[*id].kind
                             {
-                                ok.map(|ok| Results::Anon(ok))
+                                ok.map(Results::Anon)
                                     .unwrap_or_else(|| Results::Named(Vec::new()))
                             } else {
                                 unreachable!()
@@ -384,7 +384,7 @@ impl InterfaceGenerator<'_> {
                                 if let TypeDefKind::Result(Result_ { ok, .. }) =
                                     &self.resolve.types[*id].kind
                                 {
-                                    ok.map(|ok| Results::Anon(ok))
+                                    ok.map(Results::Anon)
                                         .unwrap_or_else(|| Results::Named(Vec::new()))
                                 } else {
                                     unreachable!()
