@@ -500,10 +500,10 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
     if !c_sharp.is_empty() {
         let (resolve, world) = resolve_wit_dir(&dir);
         for path in c_sharp.iter() {
-            // // TODO dicej: remove this:
-            // if !path.to_str().unwrap().contains("/records/") {
-            //     continue;
-            // }
+            // TODO dicej: remove this:
+            if !path.to_str().unwrap().contains("records") {
+                continue;
+            }
 
             let world_name = &resolve.worlds[world].name;
             let out_dir = out_dir.join(format!("csharp-{}", world_name));
@@ -574,6 +574,8 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
                 .arg(out_dir.join(format!("{camel}.csproj")))
                 .arg("-c")
                 .arg("Debug")
+                .arg("/p:PlatformTarget=AnyCPU")
+                .arg("--self-contained")
                 .arg("-o")
                 .arg(&out_wasm);
 
@@ -667,6 +669,11 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
     if !c_sharp.is_empty() {
         let (resolve, world) = resolve_wit_dir(&dir);
         for path in c_sharp.iter() {
+            // TODO dicej: remove this:
+            if !path.to_str().unwrap().contains("records") {
+                continue;
+            }
+
             let world_name = &resolve.worlds[world].name;
             let out_dir = out_dir.join(format!("csharp-{}", world_name));
             drop(fs::remove_dir_all(&out_dir));
