@@ -500,6 +500,11 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
     if !c_sharp.is_empty() {
         let (resolve, world) = resolve_wit_dir(&dir);
         for path in c_sharp.iter() {
+            // // TODO dicej: remove this:
+            // if !path.to_str().unwrap().contains("/records/") {
+            //     continue;
+            // }
+
             let world_name = &resolve.worlds[world].name;
             let out_dir = out_dir.join(format!("csharp-{}", world_name));
             drop(fs::remove_dir_all(&out_dir));
@@ -544,7 +549,9 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
                 &assembly_name,
                 world_name,
             );
-            csproj.aot();
+            if cfg!(windows) {
+                csproj.aot();
+            }
 
             // Copy test file to target location to be included in compilation
             let file_name = path.file_name().unwrap();
@@ -593,7 +600,13 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
             })?;
 
             // Translate the canonical ABI module into a component.
-            let component_type = fs::read(out_dir.join("numbers_component_type.o"))?;
+            let component_type_filename = out_dir.join(format!("{camel}_component_type.o"));
+            let component_type = fs::read(&component_type_filename).with_context(|| {
+                format!(
+                    "failed to read component type file: {}",
+                    component_type_filename.display()
+                )
+            })?;
 
             let mut new_module = wasm_encoder::Module::new();
 
