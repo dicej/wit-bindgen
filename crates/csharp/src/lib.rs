@@ -133,7 +133,6 @@ impl CSharp {
         resolve: &'a Resolve,
         name: &'a str,
         direction: Direction,
-        function_level: FunctionLevel,
     ) -> InterfaceGenerator<'a> {
         InterfaceGenerator {
             src: String::new(),
@@ -143,7 +142,6 @@ impl CSharp {
             resolve,
             name,
             direction,
-            function_level,
         }
     }
 
@@ -178,7 +176,7 @@ impl WorldGenerator for CSharp {
     ) {
         let name = interface_name(self, resolve, key, Direction::Import);
         self.interface_names.insert(id, name.clone());
-        let mut gen = self.interface(resolve, &name, Direction::Import, FunctionLevel::Interface);
+        let mut gen = self.interface(resolve, &name, Direction::Import);
 
         gen.types(id);
 
@@ -217,12 +215,7 @@ impl WorldGenerator for CSharp {
     ) {
         let name = &format!("{}-world", resolve.worlds[world].name).to_upper_camel_case();
         let name = &format!("{name}.I{name}");
-        let mut gen = self.interface(
-            resolve,
-            name,
-            Direction::Import,
-            FunctionLevel::FreeStanding,
-        );
+        let mut gen = self.interface(resolve, name, Direction::Import);
 
         for (import_module_name, func) in funcs {
             gen.import(import_module_name, func);
@@ -240,7 +233,7 @@ impl WorldGenerator for CSharp {
     ) -> Result<()> {
         let name = interface_name(self, resolve, key, Direction::Export);
         self.interface_names.insert(id, name.clone());
-        let mut gen = self.interface(resolve, &name, Direction::Export, FunctionLevel::Interface);
+        let mut gen = self.interface(resolve, &name, Direction::Export);
 
         gen.types(id);
 
@@ -284,12 +277,7 @@ impl WorldGenerator for CSharp {
     ) -> Result<()> {
         let name = &format!("{}-world", resolve.worlds[world].name).to_upper_camel_case();
         let name = &format!("{name}.I{name}");
-        let mut gen = self.interface(
-            resolve,
-            name,
-            Direction::Export,
-            FunctionLevel::FreeStanding,
-        );
+        let mut gen = self.interface(resolve, name, Direction::Export);
 
         for (resource, funcs) in by_resource(funcs.iter().copied()) {
             if let Some(resource) = resource {
@@ -317,7 +305,7 @@ impl WorldGenerator for CSharp {
         _files: &mut Files,
     ) {
         let name = &format!("{}-world", resolve.worlds[world].name);
-        let mut gen = self.interface(resolve, name, Direction::Import, FunctionLevel::Interface);
+        let mut gen = self.interface(resolve, name, Direction::Import);
 
         for (ty_name, ty) in types {
             gen.define_type(ty_name, *ty);
@@ -734,7 +722,6 @@ struct InterfaceGenerator<'a> {
     resolve: &'a Resolve,
     name: &'a str,
     direction: Direction,
-    function_level: FunctionLevel,
 }
 
 impl InterfaceGenerator<'_> {
@@ -1047,6 +1034,13 @@ impl InterfaceGenerator<'_> {
 
         let src = bindgen.src;
 
+        let vars = bindgen
+            .resource_drops
+            .iter()
+            .map(|(t, v)| format!("{t} {v} = null;"))
+            .collect::<Vec<_>>()
+            .join(";\n");
+
         let wasm_result_type = match &sig.results[..] {
             [] => "void",
             [result] => wasm_type(*result),
@@ -1098,7 +1092,7 @@ impl InterfaceGenerator<'_> {
             .collect::<Vec<String>>()
             .join(", ");
 
-        let interop_name = format!("wasmExport{camel_name}");
+        let interop_name = format!("wasmExport{}", func.name.to_upper_camel_case());
         let core_module_name = interface_name.map(|s| self.resolve.name_world_key(s));
         let export_name = func.core_export_name(core_module_name.as_deref());
 
@@ -1107,6 +1101,7 @@ impl InterfaceGenerator<'_> {
             r#"
             [UnmanagedCallersOnly(EntryPoint = "{export_name}")]
             public static unsafe {wasm_result_type} {interop_name}({wasm_params}) {{
+                {vars}
                 {src}
             }}
             "#
@@ -1339,6 +1334,17 @@ impl InterfaceGenerator<'_> {
         let docs = info.docs.clone();
         self.print_docs(&docs);
 
+        let declarations = match self.direction {
+            Direction::Import => String::new(),
+            Direction::Export => format!(
+                r#"[DllImport("{import_module_name}", EntryPoint = "[resource-new]{name}"), WasmImportLinkage]
+                   internal static extern int wasmImportResourceNew(int p0);
+
+                   [DllImport("{import_module_name}", EntryPoint = "[resource-rep]{name}"), WasmImportLinkage]
+                   internal static extern int wasmImportResourceRep(int p0);"#
+            ),
+        };
+
         uwriteln!(
             self.src,
             r#"
@@ -1351,11 +1357,13 @@ impl InterfaceGenerator<'_> {
                 }}
 
                 [DllImport("{import_module_name}", EntryPoint = "[resource-drop]{name}"), WasmImportLinkage]
-                private static extern void wasmImportDrop(int p0);
+                private static extern void wasmImportResourceDrop(int p0);
+
+                {declarations}
 
                 protected virtual void Dispose(bool disposing) {{
                     if (handle.HasValue) {{
-                        wasmImportDrop((int) handle);
+                        wasmImportResourceDrop((int) handle);
                         handle = null;
                     }}
                 }}
@@ -1746,7 +1754,7 @@ struct FunctionBindgen<'a, 'b> {
     cleanup: Vec<Cleanup>,
     import_return_pointer_area_size: usize,
     import_return_pointer_area_align: usize,
-    resource_drops: Vec<String>,
+    resource_drops: Vec<(String, String)>,
 }
 
 impl<'a, 'b> FunctionBindgen<'a, 'b> {
@@ -2451,14 +2459,10 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                 let func_name = self.func_name.to_upper_camel_case();
                 let interface_name = CSharp::get_class_name_from_qualified_name(module).1;
 
-                let class_name_root = (match self.gen.function_level {
-                    FunctionLevel::Interface => interface_name
-                        .strip_prefix("I")
-                        .unwrap()
-                        .to_upper_camel_case(),
-                    FunctionLevel::FreeStanding => interface_name,
-                })
-                .to_upper_camel_case();
+                let class_name_root = interface_name
+                    .strip_prefix("I")
+                    .unwrap()
+                    .to_upper_camel_case();
 
                 let mut oper = String::new();
 
@@ -2520,8 +2524,8 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                     }
                 }
 
-                for drop in mem::take(&mut self.resource_drops) {
-                    uwriteln!(self.src, "{drop}");
+                for (_,  drop) in &self.resource_drops {
+                    uwriteln!(self.src, "{drop}?.Dispose();");
                 }
             }
 
@@ -2530,9 +2534,8 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                     uwriteln!(self.src, "{address}.Free();");
                 }
 
-                match self.kind {
-                    FunctionKind::Constructor(_) => (),
-                    _ => match func.results.len() {
+                if !matches!((self.gen.direction, self.kind), (Direction::Import, FunctionKind::Constructor(_))) {
+                    match func.results.len() {
                         0 => (),
                         1 => uwriteln!(self.src, "return {};", operands[0]),
                         _ => {
@@ -2560,37 +2563,45 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                 let (Handle::Own(ty) | Handle::Borrow(ty)) = handle;
                 let is_own = matches!(handle, Handle::Own(_));
                 let handle = self.locals.tmp("handle");
-                let ResourceInfo { direction, .. } = &self.gen.gen.resources[&dealias(self.gen.resolve, *ty)];
+                let id = dealias(self.gen.resolve, *ty);
+                let upper_camel = self.gen.type_name_with_qualifier(&Type::Id(id), true);
+                let ResourceInfo { direction, .. } = &self.gen.gen.resources[&id];
                 let op = &operands[0];
 
                 uwriteln!(self.src, "var {handle} = {op}.handle;");
-                if let Direction::Import = direction {
-                    if is_own {
-                        uwriteln!(self.src, "{op}.handle = null;");
+                match direction {
+                    Direction::Import => {
+                        if is_own {
+                            uwriteln!(self.src, "{op}.handle = null;");
+                        }
                     }
-                } else {
-                    self.gen.gen.needs_rep_table = true;
-                    let local_rep = self.locals.tmp("localRep");
-                    if is_own {
-                        uwriteln!(
-                            self.src,
-                            "if (!handle.HasValue) {{
-                                 var {local_rep} = RepTable.Add({op});
-                                 {handle} = wasmImportResourceNew({local_rep});
-                                 {op}.handle = {handle};
-                             }}"
-                        );
-                    } else {
-                        uwriteln!(
-                            self.src,
-                            "if (!handle.HasValue) {{
-                                 var {local_rep} = RepTable.Add({op});
-                                 {op}.handle = {local_rep};
-                             }}"
-                        );
+                    Direction::Export => {
+                        self.gen.gen.needs_rep_table = true;
+                        let local_rep = self.locals.tmp("localRep");
+                        if is_own {
+                            uwriteln!(
+                                self.src,
+                                "if (!{handle}.HasValue) {{
+                                     var {local_rep} = RepTable.Add({op});
+                                     {handle} = {upper_camel}.wasmImportResourceNew({local_rep});
+                                     {op}.handle = {handle};
+                                 }}"
+                            );
+                        } else {
+                            // TODO: consider storing the rep in a different field to avoid confusion (since it's a
+                            // rep, not a handle).
+                            uwriteln!(
+                                self.src,
+                                "if (!{handle}.HasValue) {{
+                                     var {local_rep} = RepTable.Add({op});
+                                     {handle} = {local_rep};
+                                     {op}.handle = {local_rep};
+                                 }}"
+                            );
+                        }
                     }
                 }
-                results.push(format!("((int) handle)"));
+                results.push(format!("((int) {handle})"));
             }
 
             Instruction::HandleLift {
@@ -2605,30 +2616,34 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                 let ResourceInfo { direction, .. } = &self.gen.gen.resources[&id];
                 let op = &operands[0];
 
-                if let Direction::Import = direction {
-                    if let FunctionKind::Constructor(_) = self.kind {
-                        resource = "this".to_owned();
-                        uwriteln!(self.src,"{resource}.handle = {op};");
-                    } else {
-                        uwriteln!(
-                            self.src,
-                            "var {resource} = new {upper_camel}();
-                             {resource}.handle = {op};"
-                        );
+                match direction {
+                    Direction::Import => {
+                        if let FunctionKind::Constructor(_) = self.kind {
+                            resource = "this".to_owned();
+                            uwriteln!(self.src,"{resource}.handle = {op};");
+                        } else {
+                            let var = if is_own { "var" } else { "" };
+                            uwriteln!(
+                                self.src,
+                                "{var} {resource} = new {upper_camel}();
+                                 {resource}.handle = {op};"
+                            );
+                        }
+                        if !is_own {
+                            self.resource_drops.push((upper_camel, resource.clone()));
+                        }
                     }
-                    if !is_own {
-                        self.resource_drops.push(format!("{resource}.Dispose();"));
-                    }
-                } else {
-                    self.gen.gen.needs_rep_table = true;
-                    if is_own {
-                        uwriteln!(
-                            self.src,
-                            "var {resource} = ({upper_camel}) RepTable.Remove(wasmImportResourceRep({op}));
-                             {resource}.handle = null;"
-                        );
-                    } else {
-                        uwriteln!(self.src, "var {resource} = ({upper_camel}) RepTable.Get({op});");
+                    Direction::Export => {
+                        self.gen.gen.needs_rep_table = true;
+                        if is_own {
+                            uwriteln!(
+                                self.src,
+                                "var {resource} = ({upper_camel}) RepTable.Remove({upper_camel}.wasmImportResourceRep({op}));
+                                 {resource}.handle = null;"
+                            );
+                        } else {
+                            uwriteln!(self.src, "var {resource} = ({upper_camel}) RepTable.Get({op});");
+                        }
                     }
                 }
                 results.push(resource);

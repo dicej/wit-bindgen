@@ -129,11 +129,7 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
             Some("java") => java.push(path),
             Some("rs") => rust.push(path),
             Some("go") => go.push(path),
-            Some("cs") => {
-                if cfg!(windows) {
-                    c_sharp.push(path);
-                }
-            }
+            Some("cs") => c_sharp.push(path),
             _ => {}
         }
     }
@@ -592,7 +588,9 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
             let mut wasm_filename = out_wasm.clone();
             wasm_filename.set_extension("wasm");
 
-            let module = fs::read(&wasm_filename).expect("failed to read wasm file");
+            let module = fs::read(&wasm_filename).with_context(|| {
+                format!("failed to read wasm file: {}", wasm_filename.display())
+            })?;
 
             // Translate the canonical ABI module into a component.
             let component_type = fs::read(out_dir.join("numbers_component_type.o"))?;
