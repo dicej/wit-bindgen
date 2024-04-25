@@ -8,8 +8,8 @@ namespace ResourcesWorld.wit.exports
     {
         public static IExports.Z Add(IExports.Z a, IExports.Z b)
         {
-            var myA = (Z) RepTable.Get((int) a.handle);
-            var myB = (Z) RepTable.Get((int) b.handle);
+            var myA = (Z) a;
+            var myB = (Z) b;
             return new Z(myA.val + myB.val);
         }
         
@@ -18,35 +18,35 @@ namespace ResourcesWorld.wit.exports
             var y = new IImports.Y(10);
             Debug.Assert(y.GetA() == 10);
 
-            // TODO
+            // TODO: test more stuff
 
             return Result<None, string>.ok(new None());
         }
 
-        public class X : IExports.X {
+        public class X : IExports.X, IExports.IX {
             public int val;
 
             public X(int val) {
                 this.val = val;
             }
 
-            override public void SetA(int val) {
+            public void SetA(int val) {
                 this.val = val;
             }
 
-            override public int GetA() {
+            public int GetA() {
                 return val;
             }
 
-            public static X Add(IExports.X a, int b) {
-                var myA = (X) RepTable.Get((int) a.handle);
+            public static IExports.X Add(IExports.X a, int b) {
+                var myA = (X) a;
                 myA.SetA(myA.GetA() + b);
                 return myA;
             }
         }
     
-        public class Z : IExports.Z {
-            private static int numDropped = 0;
+        public class Z : IExports.Z, IExports.IZ {
+            private static uint numDropped = 0;
             
             public int val;
 
@@ -54,36 +54,34 @@ namespace ResourcesWorld.wit.exports
                 this.val = val;
             }
 
-            override public int GetA() {
+            public int GetA() {
                 return val;
             }
 
-            public static int NumDropped() {
+            public static uint NumDropped() {
                 return numDropped + 1;
             }
 
             override protected void Dispose(bool disposing) {
-                if (handle.HasValue) {
-                    numDropped += 1;
-                }
+		numDropped += 1;
                 
                 base.Dispose(disposing);
             }
         }
 
-        public class KebabCase : IExports.KebabCase {
+        public class KebabCase : IExports.KebabCase, IExports.IKebabCase {
             public uint val;
             
             public KebabCase(uint val) {
                 this.val = val;
             }
             
-            override public uint GetA() {
+            public uint GetA() {
                 return val;
             }
 
             public static uint TakeOwned(IExports.KebabCase a) {
-                var myA = (KebabCase) RepTable.Get((int) a.handle);
+                var myA = (KebabCase) RepTable.Get((int) a.Handle);
                 return myA.val;
             }
         }

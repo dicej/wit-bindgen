@@ -549,9 +549,6 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
                 &assembly_name,
                 world_name,
             );
-            if cfg!(windows) {
-                csproj.aot();
-            }
 
             // Copy test file to target location to be included in compilation
             let file_name = path.file_name().unwrap();
@@ -670,7 +667,7 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
         let (resolve, world) = resolve_wit_dir(&dir);
         for path in c_sharp.iter() {
             // TODO dicej: remove this:
-            if !path.to_str().unwrap().contains("records") {
+            if !path.to_str().unwrap().contains("resources") {
                 continue;
             }
 

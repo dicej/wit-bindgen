@@ -186,11 +186,11 @@ impl WorldGenerator for CSharp {
                 .iter()
                 .map(|(k, v)| (k.as_str(), v)),
         ) {
-            let import_module_name = &resolve.name_world_key(key);
             if let Some(resource) = resource {
-                gen.start_resource(import_module_name, resource, "", &funcs);
+                gen.start_resource(resource, Some(key));
             }
 
+            let import_module_name = &resolve.name_world_key(key);
             for func in funcs {
                 gen.import(import_module_name, func);
             }
@@ -244,12 +244,7 @@ impl WorldGenerator for CSharp {
                 .map(|(k, v)| (k.as_str(), v)),
         ) {
             if let Some(resource) = resource {
-                gen.start_resource(
-                    &format!("[export]{}", resolve.name_world_key(key)),
-                    resource,
-                    "abstract",
-                    &funcs,
-                );
+                gen.start_resource(resource, Some(key));
             }
 
             for func in funcs {
@@ -281,7 +276,7 @@ impl WorldGenerator for CSharp {
 
         for (resource, funcs) in by_resource(funcs.iter().copied()) {
             if let Some(resource) = resource {
-                gen.start_resource("[export]$root", resource, "abstract", &funcs);
+                gen.start_resource(resource, None);
             }
 
             for func in funcs {
@@ -507,10 +502,10 @@ impl WorldGenerator for CSharp {
             src.push_str(&format!("public static class {name}World\n"));
             src.push_str("{");
 
-            for fragement in &self.world_fragments {
+            for fragment in &self.world_fragments {
                 src.push_str("\n");
 
-                src.push_str(&fragement.csharp_interop_src);
+                src.push_str(&fragment.csharp_interop_src);
             }
             src.push_str("}\n");
             src.push_str("}\n");
@@ -845,7 +840,7 @@ impl InterfaceGenerator<'_> {
     }
 
     fn import(&mut self, import_module_name: &str, func: &Function) {
-        let (camel_name, static_) = match &func.kind {
+        let (camel_name, modifiers) = match &func.kind {
             FunctionKind::Freestanding | FunctionKind::Static(_) => {
                 (func.item_name().to_upper_camel_case(), "static ")
             }
@@ -993,7 +988,7 @@ impl InterfaceGenerator<'_> {
         uwrite!(
             target,
             r#"
-                internal {static_}unsafe {result_type} {camel_name}({params})
+                internal {modifiers} unsafe {result_type} {camel_name}({params})
                 {{
                     {src}
                     //TODO: free alloc handle (interopString) if exists
@@ -1005,9 +1000,9 @@ impl InterfaceGenerator<'_> {
     fn export(&mut self, func: &Function, interface_name: Option<&WorldKey>) {
         let (camel_name, modifiers) = match &func.kind {
             FunctionKind::Freestanding | FunctionKind::Static(_) => {
-                (func.item_name().to_upper_camel_case(), "static ")
+                (func.item_name().to_upper_camel_case(), "static abstract ")
             }
-            FunctionKind::Method(_) => (func.item_name().to_upper_camel_case(), "public "),
+            FunctionKind::Method(_) => (func.item_name().to_upper_camel_case(), ""),
             FunctionKind::Constructor(id) => {
                 (self.gen.resources[id].name.to_upper_camel_case(), "")
             }
@@ -1119,13 +1114,10 @@ impl InterfaceGenerator<'_> {
             );
         }
 
-        if !matches!(
-            &func.kind,
-            FunctionKind::Constructor(_) | FunctionKind::Static(_)
-        ) {
+        if !matches!(&func.kind, FunctionKind::Constructor(_)) {
             uwrite!(
                 self.src,
-                r#"{modifiers}abstract {result_type} {camel_name}({params});
+                r#"{modifiers} {result_type} {camel_name}({params});
 
             "#
             );
@@ -1321,69 +1313,105 @@ impl InterfaceGenerator<'_> {
         }
     }
 
-    fn start_resource(
-        &mut self,
-        import_module_name: &str,
-        id: TypeId,
-        modifiers: &str,
-        funcs: &[&Function],
-    ) {
+    fn start_resource(&mut self, id: TypeId, key: Option<&WorldKey>) {
+        let qualified = self.type_name_with_qualifier(&Type::Id(id), true);
         let info = &self.gen.resources[&id];
         let name = info.name.clone();
         let upper_camel = name.to_upper_camel_case();
         let docs = info.docs.clone();
         self.print_docs(&docs);
 
-        let declarations = match self.direction {
-            Direction::Import => String::new(),
-            Direction::Export => format!(
-                r#"[DllImport("{import_module_name}", EntryPoint = "[resource-new]{name}"), WasmImportLinkage]
-                   internal static extern int wasmImportResourceNew(int p0);
+        match self.direction {
+            Direction::Import => {
+                let module_name = key
+                    .map(|key| self.resolve.name_world_key(key))
+                    .unwrap_or_else(|| "$root".into());
 
-                   [DllImport("{import_module_name}", EntryPoint = "[resource-rep]{name}"), WasmImportLinkage]
-                   internal static extern int wasmImportResourceRep(int p0);"#
-            ),
-        };
+                uwriteln!(
+                    self.src,
+                    r#"
+                    public class {upper_camel}: IDisposable {{
+                        internal int? Handle {{ get; set; }}
 
-        uwriteln!(
-            self.src,
-            r#"
-            public {modifiers} class {upper_camel}: IDisposable {{
-                internal int? handle;
+                        internal readonly record struct THandle(int Handle);
 
-                public void Dispose() {{
-                    Dispose(true);
-                    GC.SuppressFinalize(this);
-                }}
+                        internal {upper_camel}(THandle handle) {{
+                            Handle = handle.Handle;
+                        }}
 
-                [DllImport("{import_module_name}", EntryPoint = "[resource-drop]{name}"), WasmImportLinkage]
-                private static extern void wasmImportResourceDrop(int p0);
+                        public void Dispose() {{
+                            Dispose(true);
+                            GC.SuppressFinalize(this);
+                        }}
 
-                {declarations}
+                        [DllImport("{module_name}", EntryPoint = "[resource-drop]{name}"), WasmImportLinkage]
+                        private static extern void wasmImportResourceDrop(int p0);
+        
+                        protected virtual void Dispose(bool disposing) {{
+                            if (Handle.HasValue) {{
+                                wasmImportResourceDrop((int) Handle);
+                                Handle = null;
+                            }}
+                        }}
+                    "#
+                );
+            }
+            Direction::Export => {
+                let prefix = key
+                    .map(|s| format!("{}#", self.resolve.name_world_key(s)))
+                    .unwrap_or_else(String::new);
 
-                protected virtual void Dispose(bool disposing) {{
-                    if (handle.HasValue) {{
-                        wasmImportResourceDrop((int) handle);
-                        handle = null;
+                uwrite!(
+                    self.csharp_interop_src,
+                    r#"
+                    [UnmanagedCallersOnly(EntryPoint = "{prefix}[dtor]{name}")]
+                    public static unsafe void wasmExportResourceDtor{upper_camel}(int rep) {{
+                        var val = ({qualified}) RepTable.Remove(rep);
+                        val.Dispose();
                     }}
-                }}
-            "#
-        );
+                    "#
+                );
 
-        if funcs
-            .iter()
-            .any(|f| matches!(&f.kind, FunctionKind::Constructor(_)))
-            && !funcs
-                .iter()
-                .any(|f| matches!(&f.kind, FunctionKind::Constructor(_)) && f.params.is_empty())
-        {
-            uwriteln!(
-                self.src,
-                r#"
-                internal {upper_camel}() {{ }}
-                "#
-            );
-        }
+                let module_name = key
+                    .map(|key| format!("[export]{}", self.resolve.name_world_key(key)))
+                    .unwrap_or_else(|| "[export]$root".into());
+
+                uwriteln!(
+                    self.src,
+                    r#"
+                    public abstract class {upper_camel}: IDisposable {{
+                        internal int? Handle {{ get; set; }}
+
+                        public void Dispose() {{
+                            Dispose(true);
+                            GC.SuppressFinalize(this);
+                        }}
+
+                        internal static class WasmInterop {{
+                            [DllImport("{module_name}", EntryPoint = "[resource-drop]{name}"), WasmImportLinkage]
+                            internal static extern void wasmImportResourceDrop(int p0);
+
+                            [DllImport("{module_name}", EntryPoint = "[resource-new]{name}"), WasmImportLinkage]
+                            internal static extern int wasmImportResourceNew(int p0);
+                    
+                            [DllImport("{module_name}", EntryPoint = "[resource-rep]{name}"), WasmImportLinkage]
+                            internal static extern int wasmImportResourceRep(int p0);
+                        }}
+
+                        protected virtual void Dispose(bool disposing) {{
+                            if (Handle.HasValue) {{
+                                var handle = (int) Handle;
+                                Handle = null;
+                                WasmInterop.wasmImportResourceDrop(handle);
+                            }}
+                        }}
+                    }}
+
+                    public interface I{upper_camel} {{
+                    "#
+                );
+            }
+        };
 
         if self.gen.opts.generate_stub {
             let super_ = self.type_name_with_qualifier(&Type::Id(id), true);
@@ -2564,38 +2592,46 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                 let is_own = matches!(handle, Handle::Own(_));
                 let handle = self.locals.tmp("handle");
                 let id = dealias(self.gen.resolve, *ty);
-                let upper_camel = self.gen.type_name_with_qualifier(&Type::Id(id), true);
                 let ResourceInfo { direction, .. } = &self.gen.gen.resources[&id];
                 let op = &operands[0];
 
-                uwriteln!(self.src, "var {handle} = {op}.handle;");
+                uwriteln!(self.src, "var {handle} = {op}.Handle;");
                 match direction {
                     Direction::Import => {
                         if is_own {
-                            uwriteln!(self.src, "{op}.handle = null;");
+                            uwriteln!(self.src, "{op}.Handle = null;");
                         }
                     }
                     Direction::Export => {
                         self.gen.gen.needs_rep_table = true;
                         let local_rep = self.locals.tmp("localRep");
+			let module = self.gen.name.to_string();
+			let interface_name = CSharp::get_class_name_from_qualified_name(module).1;
+			let class_name_root = interface_name
+			    .strip_prefix("I")
+			    .unwrap()
+			    .to_upper_camel_case();
+			let export_name = format!(
+			    "{class_name_root}Impl.{}",
+			    self.gen.type_name_with_qualifier(&Type::Id(id), false)
+			);
                         if is_own {
                             uwriteln!(
                                 self.src,
                                 "if (!{handle}.HasValue) {{
                                      var {local_rep} = RepTable.Add({op});
-                                     {handle} = {upper_camel}.wasmImportResourceNew({local_rep});
-                                     {op}.handle = {handle};
-                                 }}"
+                                     {handle} = {export_name}.WasmInterop.wasmImportResourceNew({local_rep});
+                                 }}
+                                 {op}.Handle = null;
+                                 "
                             );
                         } else {
-                            // TODO: consider storing the rep in a different field to avoid confusion (since it's a
-                            // rep, not a handle).
                             uwriteln!(
                                 self.src,
                                 "if (!{handle}.HasValue) {{
                                      var {local_rep} = RepTable.Add({op});
-                                     {handle} = {local_rep};
-                                     {op}.handle = {local_rep};
+                                     {handle} = {export_name}.WasmInterop.wasmImportResourceNew({local_rep});
+                                     {op}.Handle = {handle};
                                  }}"
                             );
                         }
@@ -2612,37 +2648,48 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                 let is_own = matches!(handle, Handle::Own(_));
                 let mut resource = self.locals.tmp("resource");
                 let id = dealias(self.gen.resolve, *ty);
-                let upper_camel = self.gen.type_name_with_qualifier(&Type::Id(id), true);
                 let ResourceInfo { direction, .. } = &self.gen.gen.resources[&id];
                 let op = &operands[0];
 
                 match direction {
                     Direction::Import => {
+			let import_name = self.gen.type_name_with_qualifier(&Type::Id(id), true);
+			
                         if let FunctionKind::Constructor(_) = self.kind {
                             resource = "this".to_owned();
-                            uwriteln!(self.src,"{resource}.handle = {op};");
+                            uwriteln!(self.src,"{resource}.Handle = {op};");
                         } else {
                             let var = if is_own { "var" } else { "" };
                             uwriteln!(
                                 self.src,
-                                "{var} {resource} = new {upper_camel}();
-                                 {resource}.handle = {op};"
+                                "{var} {resource} = new {import_name}(new {import_name}.THandle({op}));"
                             );
                         }
                         if !is_own {
-                            self.resource_drops.push((upper_camel, resource.clone()));
+                            self.resource_drops.push((import_name, resource.clone()));
                         }
                     }
                     Direction::Export => {
                         self.gen.gen.needs_rep_table = true;
+			let module = self.gen.name.to_string();
+			let interface_name = CSharp::get_class_name_from_qualified_name(module).1;
+			let class_name_root = interface_name
+			    .strip_prefix("I")
+			    .unwrap()
+			    .to_upper_camel_case();
+			let export_name = format!(
+			    "{class_name_root}Impl.{}",
+			    self.gen.type_name_with_qualifier(&Type::Id(id), false)
+			);
                         if is_own {
                             uwriteln!(
                                 self.src,
-                                "var {resource} = ({upper_camel}) RepTable.Remove({upper_camel}.wasmImportResourceRep({op}));
-                                 {resource}.handle = null;"
+                                "var {resource} = ({export_name}) RepTable.Remove\
+				     ({export_name}.WasmInterop.wasmImportResourceRep({op}));
+                                 {resource}.Handle = null;"
                             );
                         } else {
-                            uwriteln!(self.src, "var {resource} = ({upper_camel}) RepTable.Get({op});");
+                            uwriteln!(self.src, "var {resource} = ({export_name}) RepTable.Get({op});");
                         }
                     }
                 }
