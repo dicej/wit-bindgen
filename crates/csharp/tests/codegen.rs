@@ -18,8 +18,6 @@ macro_rules! codegen_test {
                     if [
                         "conventions",
                         "guest-name",
-                        "import-and-export-resource",
-                        "import-and-export-resource-alias",
                         "import-func",
                         "interface-has-golang-keyword",
                         "issue544",
@@ -36,18 +34,7 @@ macro_rules! codegen_test {
                         "option-result",
                         "record-has-keyword-used-in-func",
                         "rename-interface",
-                        "resource-alias",
-                        "resource-borrow-in-record",
-                        "resource-borrow-in-record-export",
-                        "resource-local-alias",
-                        "resource-local-alias-borrow",
-                        "resource-local-alias-borrow-import",
-                        "resource-own-in-other-interface",
-                        //"resources",
-                        "resources-in-aggregates",
-                        "resources-with-lists",
                         "result-empty",
-                        "return-resource-from-export",
                         "same-names5",
                         "simple-http",
                         "small-anonymous",
@@ -64,6 +51,7 @@ macro_rules! codegen_test {
                     ]
                     .contains(&$name)
                     {
+                        files.push("skip", &[]);
                         return;
                     }
                     #[cfg(any(all(target_os = "windows", feature = "aot"), feature = "mono"))]
@@ -87,6 +75,10 @@ macro_rules! codegen_test {
 test_helpers::codegen_tests!();
 
 fn verify(dir: &Path, name: &str) {
+    if dir.join("skip").exists() {
+        return;
+    }
+
     #[cfg(all(target_os = "windows", feature = "aot"))]
     aot_verify(dir, name);
 
