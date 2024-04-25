@@ -15,20 +15,6 @@ macro_rules! codegen_test {
                 "guest-csharp",
                 $test.as_ref(),
                 |resolve, world, files| {
-                    if [
-                        "unused-import",
-                        "go_params",
-                        "wasi-cli",
-                        "wasi-clocks",
-                        "wasi-filesystem",
-                        "wasi-http",
-                        "wasi-io",
-                    ]
-                    .contains(&$name)
-                    {
-                        files.push("skip", &[]);
-                        return;
-                    }
                     #[cfg(any(all(target_os = "windows", feature = "aot"), feature = "mono"))]
                     wit_bindgen_csharp::Opts {
                         generate_stub: true,
@@ -50,10 +36,6 @@ macro_rules! codegen_test {
 test_helpers::codegen_tests!();
 
 fn verify(dir: &Path, name: &str) {
-    if dir.join("skip").exists() {
-        return;
-    }
-
     #[cfg(all(target_os = "windows", feature = "aot"))]
     aot_verify(dir, name);
 
