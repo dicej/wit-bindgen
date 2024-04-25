@@ -837,10 +837,7 @@ impl InterfaceGenerator<'_> {
             TypeDefKind::List(t) => self.type_list(type_id, typedef_name, t, &type_def.docs),
             TypeDefKind::Variant(t) => self.type_variant(type_id, typedef_name, t, &type_def.docs),
             TypeDefKind::Result(t) => self.type_result(type_id, typedef_name, t, &type_def.docs),
-            TypeDefKind::Handle(_) => {
-                // TODO: Ensure we emit a type for each imported and exported resource, regardless of whether they
-                // contain functions.
-            }
+            TypeDefKind::Handle(_) => {}
             _ => unreachable!(),
         }
     }
