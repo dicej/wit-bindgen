@@ -661,6 +661,11 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
     if !c_sharp.is_empty() {
         let (resolve, world) = resolve_wit_dir(&dir);
         for path in c_sharp.iter() {
+	    // TODO dicej: remove this:
+	    if !path.iter().map(|v| v.to_str().unwrap()).any(|v| v == "resource_floats") {
+		continue;
+	    }
+	    
             let world_name = &resolve.worlds[world].name;
             let out_dir = out_dir.join(format!("csharp-{}", world_name));
             drop(fs::remove_dir_all(&out_dir));

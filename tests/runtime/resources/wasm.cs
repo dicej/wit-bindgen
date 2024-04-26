@@ -13,11 +13,26 @@ namespace ResourcesWorld.wit.exports
         
         public static Result<None, string> TestImports()
         {
-            var y = new IImports.Y(10);
-            Debug.Assert(y.GetA() == 10);
+            var y1 = new IImports.Y(10);
+            Debug.Assert(y1.GetA() == 10);
+	    y1.SetA(20);
+            Debug.Assert(y1.GetA() == 20);	    
+	    var y2 = IImports.Y.Add(y1, 20);
+            Debug.Assert(y2.GetA() == 40);
 
-            // TODO: test more stuff
-
+	    var y3 = new IImports.Y(1);
+	    var y4 = new IImports.Y(2);
+            Debug.Assert(y3.GetA() == 1);
+            Debug.Assert(y4.GetA() == 2);
+	    y3.SetA(10);
+	    y4.SetA(20);	    
+            Debug.Assert(y3.GetA() == 10);
+            Debug.Assert(y4.GetA() == 20);	    	    
+	    var y5 = IImports.Y.Add(y3, 20);
+	    var y6 = IImports.Y.Add(y4, 30);	    
+            Debug.Assert(y5.GetA() == 30);
+            Debug.Assert(y6.GetA() == 50);	    
+	    
             return Result<None, string>.ok(new None());
         }
 
