@@ -1,8 +1,6 @@
 using System.Diagnostics;
 using Import = ResourceImportAndExportWorld.wit.imports.test.resourceImportAndExport.ITest;
 using Host = ResourceImportAndExportWorld.wit.imports.test.resourceImportAndExport.TestInterop;
-using Export = ResourceImportAndExportWorld.wit.exports.test.resourceImportAndExport.ITest;
-using Impl = ResourceImportAndExportWorld.wit.exports.test.resourceImportAndExport.TestImpl;
 
 namespace ResourceImportAndExportWorld.wit.exports.test.resourceImportAndExport
 {
@@ -19,11 +17,11 @@ namespace ResourceImportAndExportWorld.wit.exports.test.resourceImportAndExport
 	    }
 
 	    public void Bar(uint v) {
-		this.Bar(v + 3);
+		this.val.Bar(v + 3);
 	    }
 
-	    public ITest.Thing Baz(ITest.Thing a, ITest.Thing b) {
-		return new Thing(Host.Baz(((Thing) a).val, ((Thing) b).val).Foo() + 4);
+	    public static ITest.Thing Baz(ITest.Thing a, ITest.Thing b) {
+		return new Thing(Import.Thing.Baz(((Thing) a).val, ((Thing) b).val).Foo() + 4);
 	    }
 	}
     }
@@ -31,7 +29,7 @@ namespace ResourceImportAndExportWorld.wit.exports.test.resourceImportAndExport
 
 namespace ResourceImportAndExportWorld {
     public class ResourceImportAndExportWorldImpl : IResourceImportAndExportWorld {
-	public static Export.Thing ToplevelExport(Export.Thing things) {
+	public static Import.Thing ToplevelExport(Import.Thing things) {
 	    return exports.ResourceImportAndExportWorld.ToplevelImport(things);
 	}
     }
