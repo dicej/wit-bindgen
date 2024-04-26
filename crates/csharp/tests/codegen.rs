@@ -15,11 +15,11 @@ macro_rules! codegen_test {
                 "guest-csharp",
                 $test.as_ref(),
                 |resolve, world, files| {
-                    #[cfg(any(all(target_os = "windows", feature = "aot"), feature = "mono"))]
+                    #[cfg(any(feature = "aot", feature = "mono"))]
                     wit_bindgen_csharp::Opts {
                         generate_stub: true,
                         string_encoding: StringEncoding::UTF8,
-                        #[cfg(all(target_os = "windows", feature = "aot"))]
+                        #[cfg(feature = "aot")]
                         runtime: Default::default(),
                         #[cfg(feature = "mono")]
                         runtime: wit_bindgen_csharp::CSharpRuntime::Mono,
@@ -36,7 +36,7 @@ macro_rules! codegen_test {
 test_helpers::codegen_tests!();
 
 fn verify(dir: &Path, name: &str) {
-    #[cfg(all(target_os = "windows", feature = "aot"))]
+    #[cfg(feature = "aot")]
     aot_verify(dir, name);
 
     #[cfg(feature = "mono")]
