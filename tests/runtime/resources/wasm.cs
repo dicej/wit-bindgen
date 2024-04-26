@@ -8,9 +8,7 @@ namespace ResourcesWorld.wit.exports
     {
         public static IExports.Z Add(IExports.Z a, IExports.Z b)
         {
-            var myA = (Z) a;
-            var myB = (Z) b;
-            return new Z(myA.val + myB.val);
+            return new Z(((Z) a).val + ((Z) b).val);
         }
         
         public static Result<None, string> TestImports()
@@ -81,8 +79,7 @@ namespace ResourcesWorld.wit.exports
             }
 
             public static uint TakeOwned(IExports.KebabCase a) {
-                var myA = (KebabCase) RepTable.Get((int) a.Handle);
-                return myA.val;
+                return ((KebabCase) a).val;
             }
         }
     }
