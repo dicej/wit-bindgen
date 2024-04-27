@@ -36,6 +36,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 ";
 
 #[derive(Default, Debug, Clone)]
@@ -486,6 +487,7 @@ impl WorldGenerator for CSharp {
                     
                     public static Option<T> None => none;
                     
+                    [MemberNotNullWhen(true, nameof(Value))]
                     public bool HasValue { get; }
                     
                     public T? Value { get; }
@@ -1094,7 +1096,7 @@ impl InterfaceGenerator<'_> {
         let vars = bindgen
             .resource_drops
             .iter()
-            .map(|(t, v)| format!("{t} {v} = null;"))
+            .map(|(t, v)| format!("{t}? {v} = null;"))
             .collect::<Vec<_>>()
             .join(";\n");
 
@@ -1438,7 +1440,7 @@ impl InterfaceGenerator<'_> {
 
                         protected virtual void Dispose(bool disposing) {{
                             if (Handle.HasValue) {{
-                                var handle = (int) Handle;
+                                var handle = Handle.Value;
                                 Handle = null;
                                 WasmInterop.wasmImportResourceDrop(handle);
                             }}
@@ -2135,7 +2137,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
             Instruction::RecordLower { record, .. } => {
                 let op = &operands[0];
                 for f in record.fields.iter() {
-                    results.push(format!("({}).{}", op, f.name.to_csharp_ident()));
+                    results.push(format!("{}.{}", op, f.name.to_csharp_ident()));
                 }
             }
             Instruction::RecordLift { ty, name, .. } => {
@@ -2166,7 +2168,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                     1 => results.push(format!("({})", op)),
                     _ => {
                         for i in 0..tuple.types.len() {
-                            results.push(format!("({}).Item{}", op, i + 1));
+                            results.push(format!("{}.Item{}", op, i + 1));
                         }
                     }
                 }
@@ -2232,7 +2234,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
 
                 let block = |ty: Option<&Type>, Block { body, results, .. }, payload| {
                     let payload = if let Some(_ty) = self.gen.non_empty_type(ty) {
-                        format!("var {payload} = ({op}).Value;")
+                        format!("var {payload} = {op}.Value;")
                     } else {
                         String::new()
                     };
@@ -2259,7 +2261,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                     r#"
                     {declarations}
 
-                    if (({op}).HasValue) {{
+                    if ({op}.HasValue) {{
                         {some}
                     }} else {{
                         {none}
@@ -2655,6 +2657,14 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                 let op = &operands[0];
 
                 uwriteln!(self.src, "var {handle} = {op}.Handle;");
+                //TODO: Adding this null check results in an error in one of the tests when Direction == Direction::Export
+                //uwriteln!(
+                //    self.src, 
+                //    "if (!{handle}.HasValue) {{
+                //        throw new ArgumentException(\"Resource handle \\\"{op}.Handle\\\" must not be null\");
+                //    }}"
+                //);
+
                 match direction {
                     Direction::Import => {
                         if is_own {
@@ -2687,7 +2697,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                         }
                     }
                 }
-                results.push(format!("((int) {handle})"));
+                results.push(format!("{handle}.Value"));
             }
 
             Instruction::HandleLift {
