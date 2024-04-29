@@ -5,7 +5,7 @@
  * The identifier may be used to retrieve the corresponding instance e.g. when
  * lifting a handle as part of the canonical ABI implementation.
  */
-internal class RepTable {
+internal static class RepTable {
     private static List<object> list = new List<object>();
     private static int? firstVacant = null;
     
@@ -20,11 +20,11 @@ internal class RepTable {
     internal static int Add(object v) {
         int rep;
         if (firstVacant.HasValue) {
-            rep = (int) firstVacant;
+            rep = firstVacant.Value;
             firstVacant = ((Vacant) list[rep]).next;
             list[rep] = v;
         } else {
-            rep = list.Count();
+            rep = list.Count;
             list.Add(v);
         }
         return rep;

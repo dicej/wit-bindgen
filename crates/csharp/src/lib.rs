@@ -552,7 +552,7 @@ impl WorldGenerator for CSharp {
 
         if self.needs_rep_table {
             src.push_str("\n");
-            src.push_str(include_str!("rep_table.cs"));
+            src.push_str(include_str!("RepTable.cs"));
         }
 
         if !&self.world_fragments.is_empty() {
@@ -1389,9 +1389,13 @@ impl InterfaceGenerator<'_> {
         
                         protected virtual void Dispose(bool disposing) {{
                             if (Handle.HasValue) {{
-                                wasmImportResourceDrop((int) Handle);
+                                wasmImportResourceDrop(Handle.Value);
                                 Handle = null;
                             }}
+                        }}
+
+                        ~{upper_camel}() {{
+                            Dispose(false);
                         }}
                     "#
                 );
@@ -1444,6 +1448,10 @@ impl InterfaceGenerator<'_> {
                                 Handle = null;
                                 WasmInterop.wasmImportResourceDrop(handle);
                             }}
+                        }}
+
+                        ~{upper_camel}() {{
+                            Dispose(false);
                         }}
                     }}
 
