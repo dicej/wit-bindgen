@@ -1371,7 +1371,7 @@ impl InterfaceGenerator<'_> {
                     self.src,
                     r#"
                     public class {upper_camel}: IDisposable {{
-                        internal int? Handle {{ get; set; }}
+                        internal int Handle {{ get; set; }}
 
                         internal readonly record struct THandle(int Handle);
 
@@ -1388,9 +1388,9 @@ impl InterfaceGenerator<'_> {
                         private static extern void wasmImportResourceDrop(int p0);
         
                         protected virtual void Dispose(bool disposing) {{
-                            if (Handle.HasValue) {{
-                                wasmImportResourceDrop(Handle.Value);
-                                Handle = null;
+                            if (Handle != 0) {{
+                                wasmImportResourceDrop(Handle);
+                                Handle = 0;
                             }}
                         }}
 
@@ -1410,7 +1410,7 @@ impl InterfaceGenerator<'_> {
                     r#"
                     [UnmanagedCallersOnly(EntryPoint = "{prefix}[dtor]{name}")]
                     public static unsafe void wasmExportResourceDtor{upper_camel}(int rep) {{
-                        var val = ({qualified}) RepTable.Remove(rep);
+                        var val = ({qualified}) {qualified}.repTable.Remove(rep);
                         val.Dispose();
                     }}
                     "#
@@ -1424,7 +1424,8 @@ impl InterfaceGenerator<'_> {
                     self.src,
                     r#"
                     public abstract class {upper_camel}: IDisposable {{
-                        internal int? Handle {{ get; set; }}
+                        internal static RepTable<{upper_camel}> repTable = new ();
+                        internal int Handle {{ get; set; }}
 
                         public void Dispose() {{
                             Dispose(true);
@@ -1443,9 +1444,10 @@ impl InterfaceGenerator<'_> {
                         }}
 
                         protected virtual void Dispose(bool disposing) {{
-                            if (Handle.HasValue) {{
-                                var handle = Handle.Value;
-                                Handle = null;
+                            if (Handle != 0) {{
+                                var handle = Handle;
+                                Handle = 0;
+                                repTable.Remove(WasmInterop.wasmImportResourceRep(handle));
                                 WasmInterop.wasmImportResourceDrop(handle);
                             }}
                         }}
@@ -2665,18 +2667,11 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                 let op = &operands[0];
 
                 uwriteln!(self.src, "var {handle} = {op}.Handle;");
-                //TODO: Adding this null check results in an error in one of the tests when Direction == Direction::Export
-                //uwriteln!(
-                //    self.src, 
-                //    "if (!{handle}.HasValue) {{
-                //        throw new ArgumentException(\"Resource handle \\\"{op}.Handle\\\" must not be null\");
-                //    }}"
-                //);
 
                 match direction {
                     Direction::Import => {
                         if is_own {
-                            uwriteln!(self.src, "{op}.Handle = null;");
+                            uwriteln!(self.src, "{op}.Handle = 0;");
                         }
                     }
                     Direction::Export => {
@@ -2686,18 +2681,18 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                         if is_own {
                             uwriteln!(
                                 self.src,
-                                "if (!{handle}.HasValue) {{
-                                     var {local_rep} = RepTable.Add({op});
+                                "if ({handle} == 0) {{
+                                     var {local_rep} = {export_name}.repTable.Add({op});
                                      {handle} = {export_name}.WasmInterop.wasmImportResourceNew({local_rep});
                                  }}
-                                 {op}.Handle = null;
+                                 {op}.Handle = 0;
                                  "
                             );
                         } else {
                             uwriteln!(
                                 self.src,
-                                "if (!{handle}.HasValue) {{
-                                     var {local_rep} = RepTable.Add({op});
+                                "if ({handle} == 0) {{
+                                     var {local_rep} = {export_name}.repTable.Add({op});
                                      {handle} = {export_name}.WasmInterop.wasmImportResourceNew({local_rep});
                                      {op}.Handle = {handle};
                                  }}"
@@ -2705,7 +2700,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                         }
                     }
                 }
-                results.push(format!("{handle}.Value"));
+                results.push(format!("{handle}"));
             }
 
             Instruction::HandleLift {
@@ -2744,12 +2739,12 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                         if is_own {
                             uwriteln!(
                                 self.src,
-                                "var {resource} = ({export_name}) RepTable.Remove\
+                                "var {resource} = ({export_name}) {export_name}.repTable.Get\
 				     ({export_name}.WasmInterop.wasmImportResourceRep({op}));
-                                 {resource}.Handle = null;"
+                                 {resource}.Handle = {op};"
                             );
                         } else {
-                            uwriteln!(self.src, "var {resource} = ({export_name}) RepTable.Get({op});");
+                            uwriteln!(self.src, "var {resource} = ({export_name}) {export_name}.repTable.Get({op});");
                         }
                     }
                 }

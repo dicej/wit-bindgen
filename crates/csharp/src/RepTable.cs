@@ -5,9 +5,9 @@
  * The identifier may be used to retrieve the corresponding instance e.g. when
  * lifting a handle as part of the canonical ABI implementation.
  */
-internal static class RepTable {
-    private static List<object> list = new List<object>();
-    private static int? firstVacant = null;
+internal class RepTable<T> {
+    private List<object> list = new List<object>();
+    private int? firstVacant = null;
     
     private class Vacant {
         internal int? next;
@@ -17,7 +17,7 @@ internal static class RepTable {
         }
     }
 
-    internal static int Add(object v) {
+    internal int Add(T v) {
         int rep;
         if (firstVacant.HasValue) {
             rep = firstVacant.Value;
@@ -30,17 +30,17 @@ internal static class RepTable {
         return rep;
     }
 
-    internal static object Get(int rep) {
+    internal T Get(int rep) {
         if (list[rep] is Vacant) {
             throw new ArgumentException("invalid rep");
         }
-        return list[rep];
+        return (T) list[rep];
     }
 
-    internal static object Remove(int rep) {
+    internal T Remove(int rep) {
         var val = Get(rep);
         list[rep] = new Vacant(firstVacant);
         firstVacant = rep;
-        return val;
+        return (T) val;
     }
 }
