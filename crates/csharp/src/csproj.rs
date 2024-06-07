@@ -65,7 +65,7 @@ impl CSProjectLLVMBuilder {
             "<Project Sdk=\"Microsoft.NET.Sdk\">
     
         <PropertyGroup>
-            <TargetFramework>net8.0</TargetFramework>
+            <TargetFramework>net9.0</TargetFramework>
             <LangVersion>preview</LangVersion>
             <RootNamespace>{name}</RootNamespace>
             <ImplicitUsings>enable</ImplicitUsings>
@@ -99,13 +99,15 @@ impl CSProjectLLVMBuilder {
                 </ItemGroup>
    
                 <ItemGroup>
-                    <PackageReference Include="Microsoft.DotNet.ILCompiler.LLVM" Version="9.0.0-*" />
-                    <PackageReference Include="runtime.win-x64.Microsoft.DotNet.ILCompiler.LLVM" Version="9.0.0-*" />
+                    <PackageReference Include="Microsoft.DotNet.ILCompiler.LLVM" Version="9.0.0-dev" />
+                    <PackageReference Include="runtime.linux-arm64.Microsoft.DotNet.ILCompiler.LLVM" Version="9.0.0-dev" />
                 </ItemGroup>
 
                 <Target Name="CheckWasmSdks">
-                    <Error Text="Emscripten not found, not compiling to WebAssembly. To enable WebAssembly compilation, install Emscripten and ensure the EMSDK environment variable points to the directory containing upstream/emscripten/emcc.bat"
-                        Condition="'$(EMSDK)' == ''" />
+                    <Error Text="Wasi SDK not found, not compiling to WebAssembly. To enable WebAssembly compilation, install Wasi SDK and ensure the WASI_SDK_PATH environment variable points to the directory containing share/wasi-sysroot"
+                           Condition="'$(WASI_SDK_PATH)' == ''" />
+                    <Warning Text="The WASI SDK version is too low. Please use WASI SDK 22 or newer with a 64 bit Clang."
+                             Condition="!Exists('$(WASI_SDK_PATH)/VERSION')" />
                 </Target>
                 "#,
             );
@@ -115,7 +117,7 @@ impl CSProjectLLVMBuilder {
                 Inputs=\"$(MSBuildProjectDirectory)/{camel}_cabi_realloc.c\"
                 Outputs=\"$(MSBuildProjectDirectory)/{camel}_cabi_realloc.o\"
                 >
-                <Exec Command=\"emcc.bat &quot;$(MSBuildProjectDirectory)/{camel}_cabi_realloc.c&quot; -c -o &quot;$(MSBuildProjectDirectory)/{camel}_cabi_realloc.o&quot;\"/>
+                <Exec Command=\"&quot;$(WASI_SDK_PATH)/bin/clang&quot; --target=wasm32-wasi &quot;$(MSBuildProjectDirectory)/{camel}_cabi_realloc.c&quot; -c -o &quot;$(MSBuildProjectDirectory)/{camel}_cabi_realloc.o&quot;\"/>
               </Target>
             "
             ));
@@ -131,7 +133,8 @@ impl CSProjectLLVMBuilder {
                 <!--To inherit the global NuGet package sources remove the <clear/> line below -->
                 <clear />
                 <add key="nuget" value="https://api.nuget.org/v3/index.json" />
-                <add key="dotnet-experimental" value="https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-experimental/nuget/v3/index.json" />
+                <!--<add key="dotnet-experimental" value="https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-experimental/nuget/v3/index.json" />-->
+                <add key="dotnet-experimental" value="/home/dicej/p/runtimelab/artifacts/packages/Release/Shipping" />
                 <!--<add key="dotnet-experimental" value="C:\github\runtimelab\artifacts\packages\Debug\Shipping" />-->
               </packageSources>
             </configuration>"#,
