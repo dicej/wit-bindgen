@@ -71,6 +71,7 @@ impl CSProjectLLVMBuilder {
             <ImplicitUsings>enable</ImplicitUsings>
             <Nullable>enable</Nullable>
             <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+            <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
         </PropertyGroup>
         
         <PropertyGroup>
