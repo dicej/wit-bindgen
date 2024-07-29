@@ -9,57 +9,56 @@ pub struct MyImports {
 }
 
 impl test::numbers::test::Host for MyImports {
-    fn roundtrip_u8(&mut self, val: u8) -> Result<u8> {
-        Ok(val)
+    fn roundtrip_u8(&mut self, val: u8) -> u8 {
+        val
     }
 
-    fn roundtrip_s8(&mut self, val: i8) -> Result<i8> {
-        Ok(val)
+    fn roundtrip_s8(&mut self, val: i8) -> i8 {
+        val
     }
 
-    fn roundtrip_u16(&mut self, val: u16) -> Result<u16> {
-        Ok(val)
+    fn roundtrip_u16(&mut self, val: u16) -> u16 {
+        val
     }
 
-    fn roundtrip_s16(&mut self, val: i16) -> Result<i16> {
-        Ok(val)
+    fn roundtrip_s16(&mut self, val: i16) -> i16 {
+        val
     }
 
-    fn roundtrip_u32(&mut self, val: u32) -> Result<u32> {
-        Ok(val)
+    fn roundtrip_u32(&mut self, val: u32) -> u32 {
+        val
     }
 
-    fn roundtrip_s32(&mut self, val: i32) -> Result<i32> {
-        Ok(val)
+    fn roundtrip_s32(&mut self, val: i32) -> i32 {
+        val
     }
 
-    fn roundtrip_u64(&mut self, val: u64) -> Result<u64> {
-        Ok(val)
+    fn roundtrip_u64(&mut self, val: u64) -> u64 {
+        val
     }
 
-    fn roundtrip_s64(&mut self, val: i64) -> Result<i64> {
-        Ok(val)
+    fn roundtrip_s64(&mut self, val: i64) -> i64 {
+        val
     }
 
-    fn roundtrip_float32(&mut self, val: f32) -> Result<f32> {
-        Ok(val)
+    fn roundtrip_f32(&mut self, val: f32) -> f32 {
+        val
     }
 
-    fn roundtrip_float64(&mut self, val: f64) -> Result<f64> {
-        Ok(val)
+    fn roundtrip_f64(&mut self, val: f64) -> f64 {
+        val
     }
 
-    fn roundtrip_char(&mut self, val: char) -> Result<char> {
-        Ok(val)
+    fn roundtrip_char(&mut self, val: char) -> char {
+        val
     }
 
-    fn set_scalar(&mut self, val: u32) -> Result<()> {
+    fn set_scalar(&mut self, val: u32) {
         self.scalar = val;
-        Ok(())
     }
 
-    fn get_scalar(&mut self) -> Result<u32> {
-        Ok(self.scalar)
+    fn get_scalar(&mut self) -> u32 {
+        self.scalar
     }
 }
 
@@ -156,31 +155,27 @@ fn run_test(exports: Numbers, store: &mut Store<crate::Wasi<MyImports>>) -> Resu
         i64::max_value()
     );
 
-    assert_eq!(exports.call_roundtrip_float32(&mut *store, 1.0)?, 1.0);
+    assert_eq!(exports.call_roundtrip_f32(&mut *store, 1.0)?, 1.0);
     assert_eq!(
-        exports.call_roundtrip_float32(&mut *store, f32::INFINITY)?,
+        exports.call_roundtrip_f32(&mut *store, f32::INFINITY)?,
         f32::INFINITY
     );
     assert_eq!(
-        exports.call_roundtrip_float32(&mut *store, f32::NEG_INFINITY)?,
+        exports.call_roundtrip_f32(&mut *store, f32::NEG_INFINITY)?,
         f32::NEG_INFINITY
     );
-    assert!(exports
-        .call_roundtrip_float32(&mut *store, f32::NAN)?
-        .is_nan());
+    assert!(exports.call_roundtrip_f32(&mut *store, f32::NAN)?.is_nan());
 
-    assert_eq!(exports.call_roundtrip_float64(&mut *store, 1.0)?, 1.0);
+    assert_eq!(exports.call_roundtrip_f64(&mut *store, 1.0)?, 1.0);
     assert_eq!(
-        exports.call_roundtrip_float64(&mut *store, f64::INFINITY)?,
+        exports.call_roundtrip_f64(&mut *store, f64::INFINITY)?,
         f64::INFINITY
     );
     assert_eq!(
-        exports.call_roundtrip_float64(&mut *store, f64::NEG_INFINITY)?,
+        exports.call_roundtrip_f64(&mut *store, f64::NEG_INFINITY)?,
         f64::NEG_INFINITY
     );
-    assert!(exports
-        .call_roundtrip_float64(&mut *store, f64::NAN)?
-        .is_nan());
+    assert!(exports.call_roundtrip_f64(&mut *store, f64::NAN)?.is_nan());
 
     assert_eq!(exports.call_roundtrip_char(&mut *store, 'a')?, 'a');
     assert_eq!(exports.call_roundtrip_char(&mut *store, ' ')?, ' ');

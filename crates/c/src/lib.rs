@@ -7,8 +7,8 @@ use std::fmt::Write;
 use std::mem;
 use wit_bindgen_core::abi::{self, AbiVariant, Bindgen, Bitcast, Instruction, LiftLower, WasmType};
 use wit_bindgen_core::{
-    dealias, uwrite, uwriteln, wit_parser::*, Direction, Files, InterfaceGenerator as _, Ns,
-    WorldGenerator,
+    dealias, uwrite, uwriteln, wit_parser::*, AnonymousTypeGenerator, Direction, Files,
+    InterfaceGenerator as _, Ns, WorldGenerator,
 };
 use wit_component::StringEncoding;
 
@@ -22,6 +22,10 @@ struct C {
     return_pointer_area_align: usize,
     names: Ns,
     needs_string: bool,
+    needs_union_int32_float: bool,
+    needs_union_float_int32: bool,
+    needs_union_int64_double: bool,
+    needs_union_double_int64: bool,
     prim_names: HashSet<String>,
     world: String,
     sizes: SizeAlign,
@@ -172,7 +176,7 @@ impl WorldGenerator for C {
         name: &WorldKey,
         id: InterfaceId,
         _files: &mut Files,
-    ) {
+    ) -> Result<()> {
         let wasm_import_module = resolve.name_world_key(name);
         let mut gen = self.interface(resolve, true, Some(&wasm_import_module));
         gen.interface = Some((id, name));
@@ -188,6 +192,8 @@ impl WorldGenerator for C {
         }
 
         gen.gen.src.append(&gen.src);
+
+        Ok(())
     }
 
     fn import_funcs(
@@ -331,7 +337,7 @@ impl WorldGenerator for C {
                 self.src.h_helpers,
                 "
                    // Transfers ownership of `s` into the string `ret`
-                   void {snake}_string_set({snake}_string_t *ret, {c_string_ty} *s);
+                   void {snake}_string_set({snake}_string_t *ret, const {c_string_ty} *s);
 
                    // Creates a copy of the input nul-terminate string `s` and
                    // stores it into the component model string `ret`.
@@ -345,14 +351,14 @@ impl WorldGenerator for C {
             uwrite!(
                 self.src.c_helpers,
                 "
-                   void {snake}_string_set({snake}_string_t *ret, {c_string_ty} *s) {{
+                   void {snake}_string_set({snake}_string_t *ret, const {c_string_ty} *s) {{
                        ret->ptr = ({ty}*) s;
                        ret->len = {strlen};
                    }}
 
                    void {snake}_string_dup({snake}_string_t *ret, const {c_string_ty} *s) {{
                        ret->len = {strlen};
-                       ret->ptr = cabi_realloc(NULL, 0, {size}, ret->len * {size});
+                       ret->ptr = ({ty}*) cabi_realloc(NULL, 0, {size}, ret->len * {size});
                        memcpy(ret->ptr, s, ret->len * {size});
                    }}
 
@@ -364,6 +370,30 @@ impl WorldGenerator for C {
                        ret->len = 0;
                    }}
                ",
+            );
+        }
+        if self.needs_union_int32_float {
+            uwriteln!(
+                self.src.c_helpers,
+                "\nunion int32_float {{ int32_t a; float b; }};"
+            );
+        }
+        if self.needs_union_float_int32 {
+            uwriteln!(
+                self.src.c_helpers,
+                "\nunion float_int32 {{ float a; int32_t b; }};"
+            );
+        }
+        if self.needs_union_int64_double {
+            uwriteln!(
+                self.src.c_helpers,
+                "\nunion int64_double {{ int64_t a; double b; }};"
+            );
+        }
+        if self.needs_union_double_int64 {
+            uwriteln!(
+                self.src.c_helpers,
+                "\nunion double_int64 {{ double a; int64_t b; }};"
             );
         }
         let version = env!("CARGO_PKG_VERSION");
@@ -532,8 +562,8 @@ impl C {
             Type::S32 => dst.push_str("int32_t"),
             Type::U64 => dst.push_str("uint64_t"),
             Type::S64 => dst.push_str("int64_t"),
-            Type::Float32 => dst.push_str("float"),
-            Type::Float64 => dst.push_str("double"),
+            Type::F32 => dst.push_str("float"),
+            Type::F64 => dst.push_str("double"),
             Type::String => {
                 dst.push_str(&self.world.to_snake_case());
                 dst.push_str("_");
@@ -570,6 +600,51 @@ impl C {
         self.type_names.retain(|k, _| live_import_types.contains(k));
         self.resources.retain(|k, _| live_import_types.contains(k));
     }
+
+    fn perform_cast(&mut self, op: &str, cast: &Bitcast) -> String {
+        match cast {
+            Bitcast::I32ToF32 | Bitcast::I64ToF32 => {
+                self.needs_union_int32_float = true;
+                format!("((union int32_float){{ (int32_t) {} }}).b", op)
+            }
+            Bitcast::F32ToI32 | Bitcast::F32ToI64 => {
+                self.needs_union_float_int32 = true;
+                format!("((union float_int32){{ {} }}).b", op)
+            }
+            Bitcast::I64ToF64 => {
+                self.needs_union_int64_double = true;
+                format!("((union int64_double){{ (int64_t) {} }}).b", op)
+            }
+            Bitcast::F64ToI64 => {
+                self.needs_union_double_int64 = true;
+                format!("((union double_int64){{ {} }}).b", op)
+            }
+            Bitcast::I32ToI64 | Bitcast::LToI64 | Bitcast::PToP64 => {
+                format!("(int64_t) {}", op)
+            }
+            Bitcast::I64ToI32 | Bitcast::I64ToL => {
+                format!("(int32_t) {}", op)
+            }
+            // P64 is currently represented as int64_t, so no conversion is needed.
+            Bitcast::I64ToP64 | Bitcast::P64ToI64 => {
+                format!("{}", op)
+            }
+            Bitcast::P64ToP | Bitcast::I32ToP | Bitcast::LToP => {
+                format!("(uint8_t *) {}", op)
+            }
+
+            // Cast to uintptr_t to avoid implicit pointer-to-int conversions.
+            Bitcast::PToI32 | Bitcast::PToL => format!("(uintptr_t) {}", op),
+
+            Bitcast::I32ToL | Bitcast::LToI32 | Bitcast::None => op.to_string(),
+
+            Bitcast::Sequence(sequence) => {
+                let [first, second] = &**sequence;
+                let inner = self.perform_cast(op, first);
+                self.perform_cast(&inner, second)
+            }
+        }
+    }
 }
 
 pub fn imported_types_used_by_exported_interfaces(
@@ -583,9 +658,9 @@ pub fn imported_types_used_by_exported_interfaces(
     for (_, export) in resolve.worlds[world].exports.iter() {
         match export {
             WorldItem::Function(_) => {}
-            WorldItem::Interface(i) => {
-                exported_interfaces.insert(*i);
-                live_export_types.add_interface(resolve, *i)
+            WorldItem::Interface { id, .. } => {
+                exported_interfaces.insert(*id);
+                live_export_types.add_interface(resolve, *id)
             }
             WorldItem::Type(_) => unreachable!(),
         }
@@ -642,6 +717,7 @@ fn is_prim_type_id(resolve: &Resolve, id: TypeId) -> bool {
         | TypeDefKind::Result(_)
         | TypeDefKind::Future(_)
         | TypeDefKind::Stream(_)
+        | TypeDefKind::Error
         | TypeDefKind::Unknown => false,
     }
 }
@@ -658,8 +734,8 @@ pub fn push_ty_name(resolve: &Resolve, ty: &Type, src: &mut String) {
         Type::S32 => src.push_str("s32"),
         Type::U64 => src.push_str("u64"),
         Type::S64 => src.push_str("s64"),
-        Type::Float32 => src.push_str("float32"),
-        Type::Float64 => src.push_str("float64"),
+        Type::F32 => src.push_str("f32"),
+        Type::F64 => src.push_str("f64"),
         Type::String => src.push_str("string"),
         Type::Id(id) => {
             let ty = &resolve.types[*id];
@@ -672,6 +748,7 @@ pub fn push_ty_name(resolve: &Resolve, ty: &Type, src: &mut String) {
                 | TypeDefKind::Resource
                 | TypeDefKind::Flags(_)
                 | TypeDefKind::Enum(_)
+                | TypeDefKind::Error
                 | TypeDefKind::Variant(_) => {
                     unimplemented!()
                 }
@@ -918,6 +995,7 @@ impl Return {
             TypeDefKind::Stream(_) => todo!("return_single for stream"),
             TypeDefKind::Resource => todo!("return_single for resource"),
             TypeDefKind::Unknown => unreachable!(),
+            TypeDefKind::Error => todo!(),
         }
 
         self.retptrs.push(*orig_ty);
@@ -967,10 +1045,11 @@ extern void {ns}_{snake}_drop_own({own} handle);
         let import_module = if self.in_import {
             self.wasm_import_module.unwrap().to_string()
         } else {
-            match self.interface {
+            let module = match self.interface {
                 Some((_, key)) => self.resolve.name_world_key(key),
                 None => unimplemented!("resource exports from worlds"),
-            }
+            };
+            format!("[export]{module}")
         };
 
         let drop_fn = format!("__wasm_import_{ns}_{snake}_drop");
@@ -1267,6 +1346,102 @@ void __wasm_export_{ns}_{snake}_dtor({ns}_{snake}_t* arg) {{
     }
 }
 
+impl<'a> wit_bindgen_core::AnonymousTypeGenerator<'a> for InterfaceGenerator<'a> {
+    fn resolve(&self) -> &'a Resolve {
+        self.resolve
+    }
+
+    fn anonymous_type_handle(&mut self, id: TypeId, handle: &Handle, _docs: &Docs) {
+        self.src.h_defs("\ntypedef ");
+        let resource = match handle {
+            Handle::Borrow(id) | Handle::Own(id) => id,
+        };
+        let info = &self.gen.resources[&dealias(self.resolve, *resource)];
+        match handle {
+            Handle::Borrow(_) => self.src.h_defs(&info.borrow),
+            Handle::Own(_) => self.src.h_defs(&info.own),
+        }
+        self.src.h_defs(" ");
+        self.print_typedef_target(id);
+    }
+
+    fn anonymous_type_tuple(&mut self, id: TypeId, ty: &Tuple, _docs: &Docs) {
+        self.src.h_defs("\ntypedef ");
+        self.src.h_defs("struct {\n");
+        for (i, t) in ty.types.iter().enumerate() {
+            let ty = self.gen.type_name(t);
+            uwriteln!(self.src.h_defs, "{ty} f{i};");
+        }
+        self.src.h_defs("}");
+        self.src.h_defs(" ");
+        self.print_typedef_target(id);
+    }
+
+    fn anonymous_type_option(&mut self, id: TypeId, ty: &Type, _docs: &Docs) {
+        self.src.h_defs("\ntypedef ");
+        self.src.h_defs("struct {\n");
+        self.src.h_defs("bool is_some;\n");
+        let ty = self.gen.type_name(ty);
+        uwriteln!(self.src.h_defs, "{ty} val;");
+        self.src.h_defs("}");
+        self.src.h_defs(" ");
+        self.print_typedef_target(id);
+    }
+
+    fn anonymous_type_result(&mut self, id: TypeId, ty: &Result_, _docs: &Docs) {
+        self.src.h_defs("\ntypedef ");
+        self.src.h_defs(
+            "struct {
+                bool is_err;
+            ",
+        );
+        let ok_ty = ty.ok.as_ref();
+        let err_ty = ty.err.as_ref();
+        if ok_ty.is_some() || err_ty.is_some() {
+            self.src.h_defs("union {\n");
+            if let Some(ok) = ok_ty {
+                let ty = self.gen.type_name(ok);
+                uwriteln!(self.src.h_defs, "{ty} ok;");
+            }
+            if let Some(err) = err_ty {
+                let ty = self.gen.type_name(err);
+                uwriteln!(self.src.h_defs, "{ty} err;");
+            }
+            self.src.h_defs("} val;\n");
+        }
+        self.src.h_defs("}");
+        self.src.h_defs(" ");
+        self.print_typedef_target(id);
+    }
+
+    fn anonymous_type_list(&mut self, id: TypeId, ty: &Type, _docs: &Docs) {
+        self.src.h_defs("\ntypedef ");
+        self.src.h_defs("struct {\n");
+        let ty = self.gen.type_name(ty);
+        uwriteln!(self.src.h_defs, "{ty} *ptr;");
+        self.src.h_defs("size_t len;\n");
+        self.src.h_defs("}");
+        self.src.h_defs(" ");
+        self.print_typedef_target(id);
+    }
+
+    fn anonymous_type_future(&mut self, _id: TypeId, _ty: &Option<Type>, _docs: &Docs) {
+        todo!("print_anonymous_type for future");
+    }
+
+    fn anonymous_type_stream(&mut self, _id: TypeId, _ty: &Type, _docs: &Docs) {
+        todo!("print_anonymous_type for stream");
+    }
+
+    fn anonymous_typ_type(&mut self, _id: TypeId, _ty: &Type, _docs: &Docs) {
+        todo!("print_anonymous_type for typ");
+    }
+
+    fn anonymous_type_error(&mut self, _id: TypeId, _docs: &Docs) {
+        todo!()
+    }
+}
+
 pub enum CTypeNameInfo<'a> {
     Named { name: &'a str },
     Anonymous { is_prim: bool },
@@ -1339,95 +1514,23 @@ impl InterfaceGenerator<'_> {
                         continue;
                     }
 
+                    let kind = &self.resolve.types[ty].kind;
+                    if let TypeDefKind::Handle(handle) = kind {
+                        let resource = match handle {
+                            Handle::Borrow(id) | Handle::Own(id) => id,
+                        };
+                        let origin = dealias(self.resolve, *resource);
+                        if origin == *resource {
+                            continue;
+                        }
+                    }
+
                     self.define_anonymous_type(ty)
                 }
             }
 
             self.define_dtor(ty);
         }
-    }
-
-    fn define_anonymous_type(&mut self, ty: TypeId) {
-        // skip `typedef handle_x handle_y` where `handle_x` is the same as `handle_y`
-        let kind = &self.resolve.types[ty].kind;
-        if let TypeDefKind::Handle(handle) = kind {
-            let resource = match handle {
-                Handle::Borrow(id) | Handle::Own(id) => id,
-            };
-            let origin = dealias(self.resolve, *resource);
-            if origin == *resource {
-                return;
-            }
-        }
-
-        self.src.h_defs("\ntypedef ");
-        let name = &self.gen.type_names[&ty];
-        match kind {
-            TypeDefKind::Type(_)
-            | TypeDefKind::Flags(_)
-            | TypeDefKind::Record(_)
-            | TypeDefKind::Resource
-            | TypeDefKind::Enum(_)
-            | TypeDefKind::Variant(_) => {
-                unreachable!()
-            }
-            TypeDefKind::Handle(handle) => {
-                let resource = match handle {
-                    Handle::Borrow(id) | Handle::Own(id) => id,
-                };
-                let info = &self.gen.resources[&dealias(self.resolve, *resource)];
-                match handle {
-                    Handle::Borrow(_) => self.src.h_defs(&info.borrow),
-                    Handle::Own(_) => self.src.h_defs(&info.own),
-                }
-            }
-            TypeDefKind::Tuple(t) => {
-                self.src.h_defs(&format!("struct {name} {{\n"));
-                for (i, t) in t.types.iter().enumerate() {
-                    let ty = self.gen.type_name(t);
-                    uwriteln!(self.src.h_defs, "{ty} f{i};");
-                }
-                self.src.h_defs("}");
-            }
-            TypeDefKind::Option(t) => {
-                self.src.h_defs(&format!("struct {name} {{\n"));
-                self.src.h_defs("bool is_some;\n");
-                let ty = self.gen.type_name(t);
-                uwriteln!(self.src.h_defs, "{ty} val;");
-                self.src.h_defs("}");
-            }
-            TypeDefKind::Result(r) => {
-                self.src.h_defs(&format!("struct {name} {{\n"));
-                self.src.h_defs("bool is_err;\n");
-                let ok_ty = r.ok.as_ref();
-                let err_ty = r.err.as_ref();
-                if ok_ty.is_some() || err_ty.is_some() {
-                    self.src.h_defs("union {\n");
-                    if let Some(ok) = ok_ty {
-                        let ty = self.gen.type_name(ok);
-                        uwriteln!(self.src.h_defs, "{ty} ok;");
-                    }
-                    if let Some(err) = err_ty {
-                        let ty = self.gen.type_name(err);
-                        uwriteln!(self.src.h_defs, "{ty} err;");
-                    }
-                    self.src.h_defs("} val;\n");
-                }
-                self.src.h_defs("}");
-            }
-            TypeDefKind::List(t) => {
-                self.src.h_defs(&format!("struct {name} {{\n"));
-                let ty = self.gen.type_name(t);
-                uwriteln!(self.src.h_defs, "{ty} *ptr;");
-                self.src.h_defs("size_t len;\n");
-                self.src.h_defs("}");
-            }
-            TypeDefKind::Future(_) => todo!("print_anonymous_type for future"),
-            TypeDefKind::Stream(_) => todo!("print_anonymous_type for stream"),
-            TypeDefKind::Unknown => unreachable!(),
-        }
-        self.src.h_defs(" ");
-        self.print_typedef_target(ty);
     }
 
     fn define_dtor(&mut self, id: TypeId) {
@@ -1513,6 +1616,7 @@ impl InterfaceGenerator<'_> {
                 self.free(&Type::Id(*id), "*ptr");
             }
             TypeDefKind::Unknown => unreachable!(),
+            TypeDefKind::Error => todo!(),
         }
         if c_helpers_body_start == self.src.c_helpers.len() {
             self.src.c_helpers.as_mut_string().truncate(c_helpers_start);
@@ -1544,8 +1648,8 @@ impl InterfaceGenerator<'_> {
             | Type::S32
             | Type::U64
             | Type::S64
-            | Type::Float32
-            | Type::Float64
+            | Type::F32
+            | Type::F64
             | Type::Char => {}
         }
     }
@@ -1984,18 +2088,12 @@ impl InterfaceGenerator<'_> {
                     .as_ref()
                     .map_or(false, |ty| self.contains_droppable_borrow(ty)),
 
-                TypeDefKind::Stream(s) => {
-                    s.element
-                        .as_ref()
-                        .map_or(false, |ty| self.contains_droppable_borrow(ty))
-                        || s.end
-                            .as_ref()
-                            .map_or(false, |ty| self.contains_droppable_borrow(ty))
-                }
+                TypeDefKind::Stream(s) => self.contains_droppable_borrow(s),
 
                 TypeDefKind::Type(ty) => self.contains_droppable_borrow(ty),
 
                 TypeDefKind::Unknown => false,
+                TypeDefKind::Error => todo!(),
             }
         } else {
             false
@@ -2070,7 +2168,7 @@ impl<'a, 'b> FunctionBindgen<'a, 'b> {
     fn load_ext(&mut self, ty: &str, offset: i32, operands: &[String], results: &mut Vec<String>) {
         self.load(ty, offset, operands, results);
         let result = results.pop().unwrap();
-        results.push(format!("(int32_t) ({})", result));
+        results.push(format!("(int32_t) {}", result));
     }
 
     fn store(&mut self, ty: &str, offset: i32, operands: &[String]) {
@@ -2193,10 +2291,10 @@ impl Bindgen for FunctionBindgen<'_, '_> {
 
             // f32/f64 have the same representation in the import type and in C,
             // so no conversions necessary.
-            Instruction::F32FromFloat32
-            | Instruction::F64FromFloat64
-            | Instruction::Float32FromF32
-            | Instruction::Float64FromF64 => {
+            Instruction::CoreF32FromF32
+            | Instruction::CoreF64FromF64
+            | Instruction::F32FromCoreF32
+            | Instruction::F64FromCoreF64 => {
                 results.push(operands[0].clone());
             }
 
@@ -2210,7 +2308,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
 
             Instruction::Bitcasts { casts } => {
                 for (cast, op) in casts.iter().zip(operands) {
-                    let op = perform_cast(op, cast);
+                    let op = self.gen.gen.perform_cast(op, cast);
                     results.push(op);
                 }
             }
@@ -2225,11 +2323,12 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                     results.push(format!("({}).{}", op, to_c_ident(&f.name)));
                 }
             }
-            Instruction::RecordLift { ty, .. } => {
+            Instruction::RecordLift { ty, record, .. } => {
                 let name = self.gen.gen.type_name(&Type::Id(*ty));
                 let mut result = format!("({}) {{\n", name);
-                for op in operands {
-                    uwriteln!(result, "{},", op);
+                for (field, op) in record.fields.iter().zip(operands.iter()) {
+                    let field_ty = self.gen.gen.type_name(&field.ty);
+                    uwriteln!(result, "({}) {},", field_ty, op);
                 }
                 result.push_str("}");
                 results.push(result);
@@ -2241,11 +2340,12 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                     results.push(format!("({}).f{}", op, i));
                 }
             }
-            Instruction::TupleLift { ty, .. } => {
+            Instruction::TupleLift { ty, tuple, .. } => {
                 let name = self.gen.gen.type_name(&Type::Id(*ty));
                 let mut result = format!("({}) {{\n", name);
-                for op in operands {
-                    uwriteln!(result, "{},", op);
+                for (ty, op) in tuple.types.iter().zip(operands.iter()) {
+                    let ty = self.gen.gen.type_name(&ty);
+                    uwriteln!(result, "({}) {},", ty, op);
                 }
                 result.push_str("}");
                 results.push(result);
@@ -2945,46 +3045,6 @@ impl Bindgen for FunctionBindgen<'_, '_> {
     }
 }
 
-fn perform_cast(op: &str, cast: &Bitcast) -> String {
-    match cast {
-        Bitcast::I32ToF32 | Bitcast::I64ToF32 => {
-            format!("((union {{ int32_t a; float b; }}){{ {} }}).b", op)
-        }
-        Bitcast::F32ToI32 | Bitcast::F32ToI64 => {
-            format!("((union {{ float a; int32_t b; }}){{ {} }}).b", op)
-        }
-        Bitcast::I64ToF64 => {
-            format!("((union {{ int64_t a; double b; }}){{ {} }}).b", op)
-        }
-        Bitcast::F64ToI64 => {
-            format!("((union {{ double a; int64_t b; }}){{ {} }}).b", op)
-        }
-        Bitcast::I32ToI64 | Bitcast::LToI64 | Bitcast::PToP64 => {
-            format!("(int64_t) {}", op)
-        }
-        Bitcast::I64ToI32 | Bitcast::I64ToL => {
-            format!("(int32_t) {}", op)
-        }
-        // P64 is currently represented as int64_t, so no conversion is needed.
-        Bitcast::I64ToP64 | Bitcast::P64ToI64 => {
-            format!("{}", op)
-        }
-        Bitcast::P64ToP | Bitcast::I32ToP | Bitcast::LToP => {
-            format!("(uint8_t *) {}", op)
-        }
-
-        // Cast to uintptr_t to avoid implicit pointer-to-int conversions.
-        Bitcast::PToI32 | Bitcast::PToL => format!("(uintptr_t) {}", op),
-
-        Bitcast::I32ToL | Bitcast::LToI32 | Bitcast::None => op.to_string(),
-
-        Bitcast::Sequence(sequence) => {
-            let [first, second] = &**sequence;
-            perform_cast(&perform_cast(op, first), second)
-        }
-    }
-}
-
 #[derive(Default, Clone, Copy)]
 enum SourceType {
     #[default]
@@ -3044,16 +3104,6 @@ impl Source {
     }
 }
 
-trait SourceExt {
-    fn as_source(&mut self) -> &mut wit_bindgen_core::Source;
-}
-
-impl SourceExt for wit_bindgen_core::Source {
-    fn as_source(&mut self) -> &mut wit_bindgen_core::Source {
-        self
-    }
-}
-
 fn wasm_type(ty: WasmType) -> &'static str {
     match ty {
         WasmType::I32 => "int32_t",
@@ -3100,6 +3150,7 @@ pub fn is_arg_by_pointer(resolve: &Resolve, ty: &Type) -> bool {
             TypeDefKind::Stream(_) => todo!("is_arg_by_pointer for stream"),
             TypeDefKind::Resource => todo!("is_arg_by_pointer for resource"),
             TypeDefKind::Unknown => unreachable!(),
+            TypeDefKind::Error => todo!(),
         },
         Type::String => true,
         _ => false,

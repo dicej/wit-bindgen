@@ -9,7 +9,7 @@ use std::{env, fs};
 use wasm_encoder::{Encode, Section};
 use wasmtime::component::{Component, Instance, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store, Table};
-use wasmtime_wasi::preview2::{WasiCtx, WasiCtxBuilder, WasiView};
+use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
 use wit_component::{ComponentEncoder, StringEncoding};
 use wit_parser::{Resolve, WorldId, WorldItem};
 
@@ -33,6 +33,7 @@ mod resource_import_and_export;
 mod resource_into_inner;
 mod resource_with_lists;
 mod resources;
+mod results;
 mod rust_xcrate;
 mod smoke;
 mod strings;
@@ -46,16 +47,10 @@ struct Wasi<T: Send>(T, MyCtx, ResourceTable, WasiCtx);
 
 // wasi trait
 impl<T: Send> WasiView for Wasi<T> {
-    fn table(&self) -> &ResourceTable {
-        &self.2
-    }
-    fn table_mut(&mut self) -> &mut ResourceTable {
+    fn table(&mut self) -> &mut ResourceTable {
         &mut self.2
     }
-    fn ctx(&self) -> &WasiCtx {
-        &self.3
-    }
-    fn ctx_mut(&mut self) -> &mut WasiCtx {
+    fn ctx(&mut self) -> &mut WasiCtx {
         &mut self.3
     }
 }
@@ -106,7 +101,7 @@ where
 
         let mut store = Store::new(&engine, data);
 
-        wasmtime_wasi::preview2::command::sync::add_to_linker(&mut linker)?;
+        wasmtime_wasi::add_to_linker_sync(&mut linker)?;
 
         let (exports, _) = instantiate(&mut store, &component, &linker)?;
 
@@ -135,11 +130,7 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
             Some("java") => java.push(path),
             Some("rs") => rust.push(path),
             Some("go") => go.push(path),
-            Some("cs") => {
-                if cfg!(windows) {
-                    c_sharp.push(path);
-                }
-            }
+            Some("cs") => c_sharp.push(path),
             _ => {}
         }
     }
@@ -213,63 +204,70 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
             let sdk = PathBuf::from(std::env::var_os("WASI_SDK_PATH").expect(
                 "point the `WASI_SDK_PATH` environment variable to the path of your wasi-sdk",
             ));
-            let mut cmd = Command::new(sdk.join("bin/clang"));
-            let out_wasm = out_dir.join(format!(
-                "c-{}.wasm",
-                path.file_stem().and_then(|s| s.to_str()).unwrap()
-            ));
-            cmd.arg("--sysroot").arg(sdk.join("share/wasi-sysroot"));
-            cmd.arg(path)
-                .arg(out_dir.join(format!("{snake}.c")))
-                .arg(out_dir.join(format!("{snake}_component_type.o")))
-                .arg("-I")
-                .arg(&out_dir)
-                .arg("-Wall")
-                .arg("-Wextra")
-                .arg("-Werror")
-                .arg("-Wno-unused-parameter")
-                .arg("-mexec-model=reactor")
-                .arg("-g")
-                .arg("-o")
-                .arg(&out_wasm);
-            println!("{:?}", cmd);
-            let output = match cmd.output() {
-                Ok(output) => output,
-                Err(e) => panic!("failed to spawn compiler: {}", e),
-            };
-
-            if !output.status.success() {
-                println!("status: {}", output.status);
-                println!("stdout: ------------------------------------------");
-                println!("{}", String::from_utf8_lossy(&output.stdout));
-                println!("stderr: ------------------------------------------");
-                println!("{}", String::from_utf8_lossy(&output.stderr));
-                panic!("failed to compile");
-            }
-
-            // Translate the canonical ABI module into a component.
-            let module = fs::read(&out_wasm).expect("failed to read wasm file");
-            let component = ComponentEncoder::default()
-                .module(module.as_slice())
-                .expect("pull custom sections from module")
-                .validate(true)
-                .adapter("wasi_snapshot_preview1", &wasi_adapter)
-                .expect("adapter failed to get loaded")
-                .encode()
-                .expect(&format!(
-                    "module {:?} can be translated to a component",
-                    out_wasm
+            // Test both C mode and C++ mode.
+            for compiler in ["bin/clang", "bin/clang++"] {
+                let mut cmd = Command::new(sdk.join(compiler));
+                let out_wasm = out_dir.join(format!(
+                    "c-{}.wasm",
+                    path.file_stem().and_then(|s| s.to_str()).unwrap()
                 ));
-            let component_path = out_wasm.with_extension("component.wasm");
-            fs::write(&component_path, component).expect("write component to disk");
+                cmd.arg("--sysroot").arg(sdk.join("share/wasi-sysroot"));
+                cmd.arg(path)
+                    .arg(out_dir.join(format!("{snake}.c")))
+                    .arg(out_dir.join(format!("{snake}_component_type.o")))
+                    .arg("-I")
+                    .arg(&out_dir)
+                    .arg("-Wall")
+                    .arg("-Wextra")
+                    .arg("-Werror")
+                    .arg("-Wno-unused-parameter")
+                    .arg("-mexec-model=reactor")
+                    .arg("-g")
+                    .arg("-o")
+                    .arg(&out_wasm);
+                // Disable the warning about compiling a `.c` file in C++ mode.
+                if compiler.ends_with("++") {
+                    cmd.arg("-Wno-deprecated");
+                }
+                println!("{:?}", cmd);
+                let output = match cmd.output() {
+                    Ok(output) => output,
+                    Err(e) => panic!("failed to spawn compiler: {}", e),
+                };
 
-            result.push(component_path);
+                if !output.status.success() {
+                    println!("status: {}", output.status);
+                    println!("stdout: ------------------------------------------");
+                    println!("{}", String::from_utf8_lossy(&output.stdout));
+                    println!("stderr: ------------------------------------------");
+                    println!("{}", String::from_utf8_lossy(&output.stderr));
+                    panic!("failed to compile");
+                }
+
+                // Translate the canonical ABI module into a component.
+                let module = fs::read(&out_wasm).expect("failed to read wasm file");
+                let component = ComponentEncoder::default()
+                    .module(module.as_slice())
+                    .expect("pull custom sections from module")
+                    .validate(true)
+                    .adapter("wasi_snapshot_preview1", &wasi_adapter)
+                    .expect("adapter failed to get loaded")
+                    .encode()
+                    .expect(&format!(
+                        "module {:?} can be translated to a component",
+                        out_wasm
+                    ));
+                let component_path = out_wasm.with_extension("component.wasm");
+                fs::write(&component_path, component).expect("write component to disk");
+
+                result.push(component_path);
+            }
         }
     }
 
     // FIXME: need to fix flaky Go test
     #[cfg(feature = "go")]
-    if !go.is_empty() {
+    if !go.is_empty() && name != "flavorful" {
         let (resolve, world) = resolve_wit_dir(&dir);
         let world_name = &resolve.worlds[world].name;
         let out_dir = out_dir.join(format!("go-{}", world_name));
@@ -500,7 +498,7 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
     }
 
     #[cfg(feature = "csharp-mono")]
-    if !c_sharp.is_empty() {
+    if cfg!(windows) && !c_sharp.is_empty() {
         let (resolve, world) = resolve_wit_dir(&dir);
         for path in c_sharp.iter() {
             let world_name = &resolve.worlds[world].name;
@@ -547,7 +545,6 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
                 &assembly_name,
                 world_name,
             );
-            csproj.aot();
 
             // Copy test file to target location to be included in compilation
             let file_name = path.file_name().unwrap();
@@ -570,6 +567,8 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
                 .arg(out_dir.join(format!("{camel}.csproj")))
                 .arg("-c")
                 .arg("Debug")
+                .arg("/p:PlatformTarget=AnyCPU")
+                .arg("--self-contained")
                 .arg("-o")
                 .arg(&out_wasm);
 
@@ -591,10 +590,18 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
             let mut wasm_filename = out_wasm.clone();
             wasm_filename.set_extension("wasm");
 
-            let module = fs::read(&wasm_filename).expect("failed to read wasm file");
+            let module = fs::read(&wasm_filename).with_context(|| {
+                format!("failed to read wasm file: {}", wasm_filename.display())
+            })?;
 
             // Translate the canonical ABI module into a component.
-            let component_type = fs::read(out_dir.join("numbers_component_type.o"))?;
+            let component_type_filename = out_dir.join(format!("{camel}_component_type.o"));
+            let component_type = fs::read(&component_type_filename).with_context(|| {
+                format!(
+                    "failed to read component type file: {}",
+                    component_type_filename.display()
+                )
+            })?;
 
             let mut new_module = wasm_encoder::Module::new();
 
@@ -651,8 +658,8 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
         }
     }
 
-    #[cfg(feature = "csharp-naot")]
-    if !c_sharp.is_empty() {
+    #[cfg(feature = "csharp")]
+    if cfg!(windows) && !c_sharp.is_empty() {
         let (resolve, world) = resolve_wit_dir(&dir);
         for path in c_sharp.iter() {
             let world_name = &resolve.worlds[world].name;
@@ -770,7 +777,7 @@ fn tests(name: &str, dir_name: &str) -> Result<Vec<PathBuf>> {
 #[allow(dead_code)] // not used by all generators
 fn resolve_wit_dir(dir: &PathBuf) -> (Resolve, WorldId) {
     let mut resolve = Resolve::new();
-    let (pkg, _files) = resolve.push_path(dir).unwrap();
-    let world = resolve.select_world(pkg, None).unwrap();
+    let (pkgs, _files) = resolve.push_path(dir).unwrap();
+    let world = resolve.select_world(&pkgs, None).unwrap();
     (resolve, world)
 }

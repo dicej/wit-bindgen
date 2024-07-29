@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use wasmtime::{component::Resource, Result, Store};
 
 use self::test::resource_import_and_export::test::{Host, HostThing};
-use crate::resource_import_and_export::exports::test::resource_import_and_export::test::Test;
+use crate::resource_import_and_export::exports::test::resource_import_and_export::test::Guest;
 
 wasmtime::component::bindgen!(in "tests/runtime/resource_import_and_export");
 
@@ -13,35 +13,34 @@ pub struct MyHostThing {
 }
 
 impl ResourceImportAndExportImports for MyHostThing {
-    fn toplevel_import(&mut self, a: Resource<Thing>) -> Result<Resource<Thing>> {
-        Ok(a)
+    fn toplevel_import(&mut self, a: Resource<Thing>) -> Resource<Thing> {
+        a
     }
 }
 
 impl Host for MyHostThing {}
 
 impl HostThing for MyHostThing {
-    fn new(&mut self, v: u32) -> Result<Resource<Thing>> {
+    fn new(&mut self, v: u32) -> Resource<Thing> {
         let id = self.next_id;
         self.next_id += 1;
         self.map_l.insert(id, v + 1);
-        Ok(Resource::new_own(id))
+        Resource::new_own(id)
     }
 
-    fn foo(&mut self, self_: Resource<Thing>) -> Result<u32> {
+    fn foo(&mut self, self_: Resource<Thing>) -> u32 {
         let id = self_.rep();
-        Ok(self.map_l[&id] + 2)
+        self.map_l[&id] + 2
     }
 
-    fn bar(&mut self, self_: Resource<Thing>, v: u32) -> Result<()> {
+    fn bar(&mut self, self_: Resource<Thing>, v: u32) {
         let id = self_.rep();
         self.map_l.insert(id, v + 3);
-        Ok(())
     }
 
-    fn baz(&mut self, a: Resource<Thing>, b: Resource<Thing>) -> Result<Resource<Thing>> {
-        let a = self.foo(a)?;
-        let b = self.foo(b)?;
+    fn baz(&mut self, a: Resource<Thing>, b: Resource<Thing>) -> Resource<Thing> {
+        let a = self.foo(a);
+        let b = self.foo(b);
         self.new(a + b + 4)
     }
 
@@ -65,7 +64,7 @@ fn run() -> anyhow::Result<()> {
     )
 }
 
-fn run_test(instance: Test, store: &mut Store<crate::Wasi<MyHostThing>>) -> anyhow::Result<()> {
+fn run_test(instance: Guest, store: &mut Store<crate::Wasi<MyHostThing>>) -> anyhow::Result<()> {
     let thing1 = instance.thing().call_constructor(&mut *store, 42)?;
 
     // 42 + 1 (constructor) + 1 (constructor) + 2 (foo) + 2 (foo)

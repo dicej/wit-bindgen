@@ -160,13 +160,12 @@ void lists_test_imports() {
     int8_t s8[2] = {SCHAR_MIN, SCHAR_MAX};
     lists_list_u8_t list_u8 = { u8, 2 };
     lists_list_s8_t list_s8 = { s8, 2 };
-    lists_list_u8_t list_u8_out;
-    lists_list_s8_t list_s8_out;
-    test_lists_test_list_minmax8(&list_u8, &list_s8, &list_u8_out, &list_s8_out);
-    assert(list_u8_out.len == 2 && list_u8_out.ptr[0] == 0 && list_u8_out.ptr[1] == UCHAR_MAX);
-    assert(list_s8_out.len == 2 && list_s8_out.ptr[0] == SCHAR_MIN && list_s8_out.ptr[1] == SCHAR_MAX);
-    lists_list_u8_free(&list_u8_out);
-    lists_list_s8_free(&list_s8_out);
+    lists_tuple2_list_u8_list_s8_t ret;
+    test_lists_test_list_minmax8(&list_u8, &list_s8, &ret);
+    assert(ret.f0.len == 2 && ret.f0.ptr[0] == 0 && ret.f0.ptr[1] == UCHAR_MAX);
+    assert(ret.f1.len == 2 && ret.f1.ptr[0] == SCHAR_MIN && ret.f1.ptr[1] == SCHAR_MAX);
+    lists_list_u8_free(&ret.f0);
+    lists_list_s8_free(&ret.f1);
   }
 
   {
@@ -174,13 +173,12 @@ void lists_test_imports() {
     int16_t s16[2] = {SHRT_MIN, SHRT_MAX};
     lists_list_u16_t list_u16 = { u16, 2 };
     lists_list_s16_t list_s16 = { s16, 2 };
-    lists_list_u16_t list_u16_out;
-    lists_list_s16_t list_s16_out;
-    test_lists_test_list_minmax16(&list_u16, &list_s16, &list_u16_out, &list_s16_out);
-    assert(list_u16_out.len == 2 && list_u16_out.ptr[0] == 0 && list_u16_out.ptr[1] == USHRT_MAX);
-    assert(list_s16_out.len == 2 && list_s16_out.ptr[0] == SHRT_MIN && list_s16_out.ptr[1] == SHRT_MAX);
-    lists_list_u16_free(&list_u16_out);
-    lists_list_s16_free(&list_s16_out);
+    lists_tuple2_list_u16_list_s16_t ret;
+    test_lists_test_list_minmax16(&list_u16, &list_s16, &ret);
+    assert(ret.f0.len == 2 && ret.f0.ptr[0] == 0 && ret.f0.ptr[1] == USHRT_MAX);
+    assert(ret.f1.len == 2 && ret.f1.ptr[0] == SHRT_MIN && ret.f1.ptr[1] == SHRT_MAX);
+    lists_list_u16_free(&ret.f0);
+    lists_list_s16_free(&ret.f1);
   }
 
   {
@@ -188,13 +186,12 @@ void lists_test_imports() {
     int32_t s32[2] = {INT_MIN, INT_MAX};
     lists_list_u32_t list_u32 = { u32, 2 };
     lists_list_s32_t list_s32 = { s32, 2 };
-    lists_list_u32_t list_u32_out;
-    lists_list_s32_t list_s32_out;
-    test_lists_test_list_minmax32(&list_u32, &list_s32, &list_u32_out, &list_s32_out);
-    assert(list_u32_out.len == 2 && list_u32_out.ptr[0] == 0 && list_u32_out.ptr[1] == UINT_MAX);
-    assert(list_s32_out.len == 2 && list_s32_out.ptr[0] == INT_MIN && list_s32_out.ptr[1] == INT_MAX);
-    lists_list_u32_free(&list_u32_out);
-    lists_list_s32_free(&list_s32_out);
+    lists_tuple2_list_u32_list_s32_t ret;
+    test_lists_test_list_minmax32(&list_u32, &list_s32, &ret);
+    assert(ret.f0.len == 2 && ret.f0.ptr[0] == 0 && ret.f0.ptr[1] == UINT_MAX);
+    assert(ret.f1.len == 2 && ret.f1.ptr[0] == INT_MIN && ret.f1.ptr[1] == INT_MAX);
+    lists_list_u32_free(&ret.f0);
+    lists_list_s32_free(&ret.f1);
   }
 
   {
@@ -202,29 +199,27 @@ void lists_test_imports() {
     int64_t s64[2] = {LLONG_MIN, LLONG_MAX};
     lists_list_u64_t list_u64 = { u64, 2 };
     lists_list_s64_t list_s64 = { s64, 2 };
-    lists_list_u64_t list_u64_out;
-    lists_list_s64_t list_s64_out;
-    test_lists_test_list_minmax64(&list_u64, &list_s64, &list_u64_out, &list_s64_out);
-    assert(list_u64_out.len == 2 && list_u64_out.ptr[0] == 0 && list_u64_out.ptr[1] == ULLONG_MAX);
-    assert(list_s64_out.len == 2 && list_s64_out.ptr[0] == LLONG_MIN && list_s64_out.ptr[1] == LLONG_MAX);
-    lists_list_u64_free(&list_u64_out);
-    lists_list_s64_free(&list_s64_out);
+    lists_tuple2_list_u64_list_s64_t ret;
+    test_lists_test_list_minmax64(&list_u64, &list_s64, &ret);
+    assert(ret.f0.len == 2 && ret.f0.ptr[0] == 0 && ret.f0.ptr[1] == ULLONG_MAX);
+    assert(ret.f1.len == 2 && ret.f1.ptr[0] == LLONG_MIN && ret.f1.ptr[1] == LLONG_MAX);
+    lists_list_u64_free(&ret.f0);
+    lists_list_s64_free(&ret.f1);
   }
 
   {
     float f32[4] = {-FLT_MAX, FLT_MAX, -INFINITY, INFINITY};
     double f64[4] = {-DBL_MAX, DBL_MAX, -INFINITY, INFINITY};
-    lists_list_float32_t list_float32 = { f32, 4 };
-    lists_list_float64_t list_float64 = { f64, 4 };
-    lists_list_float32_t list_float32_out;
-    lists_list_float64_t list_float64_out;
-    test_lists_test_list_minmax_float(&list_float32, &list_float64, &list_float32_out, &list_float64_out);
-    assert(list_float32_out.len == 4 && list_float32_out.ptr[0] == -FLT_MAX && list_float32_out.ptr[1] == FLT_MAX);
-    assert(list_float32_out.ptr[2] == -INFINITY && list_float32_out.ptr[3] == INFINITY);
-    assert(list_float64_out.len == 4 && list_float64_out.ptr[0] == -DBL_MAX && list_float64_out.ptr[1] == DBL_MAX);
-    assert(list_float64_out.ptr[2] == -INFINITY && list_float64_out.ptr[3] == INFINITY);
-    lists_list_float32_free(&list_float32_out);
-    lists_list_float64_free(&list_float64_out);
+    lists_list_f32_t list_f32 = { f32, 4 };
+    lists_list_f64_t list_f64 = { f64, 4 };
+    lists_tuple2_list_f32_list_f64_t ret;
+    test_lists_test_list_minmax_float(&list_f32, &list_f64, &ret);
+    assert(ret.f0.len == 4 && ret.f0.ptr[0] == -FLT_MAX && ret.f0.ptr[1] == FLT_MAX);
+    assert(ret.f0.ptr[2] == -INFINITY && ret.f0.ptr[3] == INFINITY);
+    assert(ret.f1.len == 4 && ret.f1.ptr[0] == -DBL_MAX && ret.f1.ptr[1] == DBL_MAX);
+    assert(ret.f1.ptr[2] == -INFINITY && ret.f1.ptr[3] == INFINITY);
+    lists_list_f32_free(&ret.f0);
+    lists_list_f64_free(&ret.f1);
   }
 }
 
@@ -307,7 +302,7 @@ void exports_test_lists_test_list_param4(lists_list_list_string_t *a) {
 }
 
 void exports_test_lists_test_list_result(lists_list_u8_t *ret0) {
-  ret0->ptr = malloc(5);
+  ret0->ptr = (uint8_t *) malloc(5);
   ret0->len = 5;
   ret0->ptr[0] = 1;
   ret0->ptr[1] = 2;
@@ -322,7 +317,7 @@ void exports_test_lists_test_list_result2(lists_string_t *ret0) {
 
 void exports_test_lists_test_list_result3(lists_list_string_t *ret0) {
   ret0->len = 2;
-  ret0->ptr = malloc(2 * sizeof(lists_string_t));
+  ret0->ptr = (lists_string_t *) malloc(2 * sizeof(lists_string_t));
 
   lists_string_dup(&ret0->ptr[0], "hello,");
   lists_string_dup(&ret0->ptr[1], "world!");
@@ -336,22 +331,22 @@ void exports_test_lists_test_string_roundtrip(lists_string_t *a, lists_string_t 
   *ret0 = *a;
 }
 
-void exports_test_lists_test_list_minmax8(lists_list_u8_t *a, lists_list_s8_t *b, lists_list_u8_t *ret0, lists_list_s8_t *ret1) {
+void exports_test_lists_test_list_minmax8(lists_list_u8_t *a, lists_list_s8_t *b, lists_tuple2_list_u8_list_s8_t *ret) {
   assert(0); // unimplemented
 }
 
-void exports_test_lists_test_list_minmax16(lists_list_u16_t *a, lists_list_s16_t *b, lists_list_u16_t *ret0, lists_list_s16_t *ret1) {
+void exports_test_lists_test_list_minmax16(lists_list_u16_t *a, lists_list_s16_t *b, lists_tuple2_list_u16_list_s16_t *ret) {
   assert(0); // unimplemented
 }
 
-void exports_test_lists_test_list_minmax32(lists_list_u32_t *a, lists_list_s32_t *b, lists_list_u32_t *ret0, lists_list_s32_t *ret1) {
+void exports_test_lists_test_list_minmax32(lists_list_u32_t *a, lists_list_s32_t *b, lists_tuple2_list_u32_list_s32_t *ret) {
   assert(0); // unimplemented
 }
 
-void exports_test_lists_test_list_minmax64(lists_list_u64_t *a, lists_list_s64_t *b, lists_list_u64_t *ret0, lists_list_s64_t *ret1) {
+void exports_test_lists_test_list_minmax64(lists_list_u64_t *a, lists_list_s64_t *b, lists_tuple2_list_u64_list_s64_t *ret) {
   assert(0); // unimplemented
 }
 
-void exports_test_lists_test_list_minmax_float(lists_list_float32_t *a, lists_list_float64_t *b, lists_list_float32_t *ret0, lists_list_float64_t *ret1) {
+void exports_test_lists_test_list_minmax_float(lists_list_f32_t *a, lists_list_f64_t *b, lists_tuple2_list_f32_list_f64_t *ret) {
   assert(0); // unimplemented
 }

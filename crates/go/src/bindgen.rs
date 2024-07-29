@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use wit_bindgen_c::{flags_repr, int_repr};
 use wit_bindgen_core::wit_parser::Handle::{Borrow, Own};
-use wit_bindgen_core::wit_parser::{Field, Function, Handle, Type, TypeDefKind};
+use wit_bindgen_core::wit_parser::{Field, Function, Type, TypeDefKind};
 use wit_bindgen_core::{dealias, uwriteln, Direction, Source};
 
 use super::avoid_keyword;
@@ -198,7 +198,7 @@ impl<'a, 'b> FunctionBindgen<'a, 'b> {
                         uwriteln!(self.lower_src, "var {lower_name} {c_typedef_target}");
                         for field in r.fields.iter() {
                             let c_field_name = &self.get_c_field_name(field);
-                            let field_name = &self.interface.field_name(field);
+                            let field_name = &self.get_go_field_name(field);
 
                             self.lower_value(
                                 &format!("{param}.{field_name}"),
@@ -334,8 +334,8 @@ impl<'a, 'b> FunctionBindgen<'a, 'b> {
                                 let resource = dealias(
                                     self.interface.resolve,
                                     *match h {
-                                        Handle::Borrow(resource) => resource,
-                                        Handle::Own(resource) => resource,
+                                        Borrow(resource) => resource,
+                                        Own(resource) => resource,
                                     },
                                 );
                                 let ns = self.interface.c_namespace_of_resource(resource);
@@ -394,6 +394,7 @@ impl<'a, 'b> FunctionBindgen<'a, 'b> {
                         }
                     }
                     TypeDefKind::Unknown => unreachable!(),
+                    TypeDefKind::Error => todo!(),
                 }
             }
             a => {
@@ -439,7 +440,7 @@ impl<'a, 'b> FunctionBindgen<'a, 'b> {
                             ty_name = self.interface.get_ty(&Type::Id(*id)),
                         );
                         for field in r.fields.iter() {
-                            let field_name = &self.interface.field_name(field);
+                            let field_name = &self.get_go_field_name(field);
                             let c_field_name = &self.get_c_field_name(field);
                             self.lift_value(
                                 &format!("{param}.{c_field_name}"),
@@ -629,8 +630,8 @@ impl<'a, 'b> FunctionBindgen<'a, 'b> {
                                 let resource = dealias(
                                     self.interface.resolve,
                                     *match h {
-                                        Handle::Borrow(resource) => resource,
-                                        Handle::Own(resource) => resource,
+                                        Borrow(resource) => resource,
+                                        Own(resource) => resource,
                                     },
                                 );
                                 // we want to get the namespace of the dealias resource since
@@ -678,6 +679,7 @@ impl<'a, 'b> FunctionBindgen<'a, 'b> {
                         }
                     }
                     TypeDefKind::Unknown => unreachable!(),
+                    TypeDefKind::Error => todo!(),
                 }
             }
             a => {
@@ -690,6 +692,12 @@ impl<'a, 'b> FunctionBindgen<'a, 'b> {
     }
 
     pub(crate) fn get_c_field_name(&mut self, field: &Field) -> String {
-        field.name.to_snake_case()
+        let name = wit_bindgen_c::to_c_ident(field.name.to_snake_case().as_str());
+        avoid_keyword(&name)
+    }
+
+    pub(crate) fn get_go_field_name(&mut self, field: &Field) -> String {
+        let name = &self.interface.field_name(field);
+        avoid_keyword(name)
     }
 }

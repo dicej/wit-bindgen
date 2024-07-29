@@ -4,7 +4,7 @@ use std::mem;
 use std::process::Stdio;
 
 use anyhow::Result;
-use heck::{ToKebabCase, ToSnakeCase};
+use heck::ToSnakeCase;
 use wit_bindgen_c::imported_types_used_by_exported_interfaces;
 use wit_bindgen_core::wit_parser::{
     Function, InterfaceId, LiveTypes, Resolve, SizeAlign, Type, TypeId, WorldId, WorldKey,
@@ -21,11 +21,18 @@ pub struct Opts {
     /// Whether or not `gofmt` is executed to format generated code.
     #[cfg_attr(feature = "clap", arg(long))]
     pub gofmt: bool,
+
+    /// Rename the Go package in the generated source code.
+    #[cfg_attr(feature = "clap", arg(long))]
+    pub rename_package: Option<String>,
 }
 
 impl Default for Opts {
     fn default() -> Self {
-        Self { gofmt: true } // Set the default value of gofmt to true
+        Self {
+            gofmt: true,
+            rename_package: None,
+        } // Set the default value of gofmt to true
     }
 }
 
@@ -105,8 +112,8 @@ impl TinyGo {
             Type::S16 => "int16_t".into(),
             Type::S32 => "int32_t".into(),
             Type::S64 => "int64_t".into(),
-            Type::Float32 => "float".into(),
-            Type::Float64 => "double".into(),
+            Type::F32 => "float".into(),
+            Type::F64 => "double".into(),
             Type::Char => "uint32_t".into(),
             Type::String => {
                 format!(
@@ -147,8 +154,11 @@ impl TinyGo {
 
 impl WorldGenerator for TinyGo {
     fn preprocess(&mut self, resolve: &Resolve, world: WorldId) {
-        let name = &resolve.worlds[world].name;
-        self.world = name.to_string();
+        self.world = self
+            .opts
+            .rename_package
+            .clone()
+            .unwrap_or_else(|| resolve.worlds[world].name.clone());
         self.sizes.fill(resolve);
         self.world_id = Some(world);
     }
@@ -159,7 +169,7 @@ impl WorldGenerator for TinyGo {
         name: &WorldKey,
         id: InterfaceId,
         _files: &mut Files,
-    ) {
+    ) -> Result<()> {
         let name_raw = &resolve.name_world_key(name);
         self.src
             .push_str(&format!("// Import functions from {name_raw}\n"));
@@ -177,6 +187,8 @@ impl WorldGenerator for TinyGo {
         let preamble = mem::take(&mut gen.preamble);
         self.src.push_str(&src);
         self.preamble.append_src(&preamble);
+
+        Ok(())
     }
 
     fn import_funcs(
@@ -294,7 +306,7 @@ impl WorldGenerator for TinyGo {
         // prepend package and imports header
         let src = mem::take(&mut self.src);
         wit_bindgen_core::generated_preamble(&mut self.src, env!("CARGO_PKG_VERSION"));
-        let snake = self.world.to_snake_case();
+        let snake = avoid_keyword(self.world.to_snake_case().as_str()).to_owned();
         // add package
         self.src.push_str("package ");
         self.src.push_str(&snake);
@@ -309,13 +321,10 @@ impl WorldGenerator for TinyGo {
             self.src.append_src(&self.preamble);
         }
         self.src.push_str("import \"C\"\n");
-        let world = &resolve.worlds[id];
+        let world = self.world.to_snake_case();
 
-        self.import_requirements.generate(
-            snake,
-            files,
-            format!("{}_types.go", world.name.to_kebab_case()),
-        );
+        self.import_requirements
+            .generate(snake, files, format!("{}_types.go", world));
         self.src.push_str(&self.import_requirements.src);
 
         self.src.push_str(&src);
@@ -342,14 +351,12 @@ impl WorldGenerator for TinyGo {
             let status = child.wait().expect("failed to wait on gofmt");
             assert!(status.success());
         }
-        files.push(
-            &format!("{}.go", world.name.to_kebab_case()),
-            self.src.as_bytes(),
-        );
+        files.push(&format!("{}.go", world), self.src.as_bytes());
 
         let mut opts = wit_bindgen_c::Opts::default();
         opts.no_sig_flattening = true;
         opts.no_object_file = true;
+        opts.rename_world = self.opts.rename_package.clone();
         opts.build()
             .generate(resolve, id, files)
             .expect("C generator should be infallible");
@@ -360,7 +367,7 @@ impl WorldGenerator for TinyGo {
 
 fn avoid_keyword(s: &str) -> String {
     if GOKEYWORDS.contains(&s) {
-        format!("{s}_")
+        format!("_{s}")
     } else {
         s.into()
     }

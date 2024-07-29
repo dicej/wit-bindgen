@@ -92,7 +92,7 @@ impl WorldGenerator for TeaVmJava {
         key: &WorldKey,
         id: InterfaceId,
         _files: &mut Files,
-    ) {
+    ) -> Result<()> {
         let name = interface_name(resolve, key, Direction::Import);
         self.interface_names.insert(id, name.clone());
         let mut gen = self.interface(resolve, &name);
@@ -103,6 +103,8 @@ impl WorldGenerator for TeaVmJava {
         }
 
         gen.add_interface_fragment();
+
+        Ok(())
     }
 
     fn import_funcs(
@@ -663,8 +665,8 @@ impl InterfaceGenerator<'_> {
             Type::U16 | Type::S16 => "short".into(),
             Type::U32 | Type::S32 | Type::Char => "int".into(),
             Type::U64 | Type::S64 => "long".into(),
-            Type::Float32 => "float".into(),
-            Type::Float64 => "double".into(),
+            Type::F32 => "float".into(),
+            Type::F64 => "double".into(),
             Type::String => "String".into(),
             Type::Id(id) => {
                 let ty = &self.resolve.types[*id];
@@ -737,8 +739,8 @@ impl InterfaceGenerator<'_> {
             Type::U16 | Type::S16 => "Short".into(),
             Type::U32 | Type::S32 | Type::Char => "Integer".into(),
             Type::U64 | Type::S64 => "Long".into(),
-            Type::Float32 => "Float".into(),
-            Type::Float64 => "Double".into(),
+            Type::F32 => "Float".into(),
+            Type::F64 => "Double".into(),
             Type::Id(id) => {
                 let def = &self.resolve.types[*id];
                 match &def.kind {
@@ -1326,10 +1328,10 @@ impl Bindgen for FunctionBindgen<'_, '_> {
             | Instruction::I32FromS32
             | Instruction::I64FromS64
             | Instruction::I64FromU64
-            | Instruction::F32FromFloat32
-            | Instruction::F64FromFloat64
-            | Instruction::Float32FromF32
-            | Instruction::Float64FromF64 => results.push(operands[0].clone()),
+            | Instruction::CoreF32FromF32
+            | Instruction::CoreF64FromF64
+            | Instruction::F32FromCoreF32
+            | Instruction::F64FromCoreF64 => results.push(operands[0].clone()),
 
             Instruction::Bitcasts { casts } => results.extend(
                 casts
@@ -1571,7 +1573,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                 // Note that we can only reliably use `Address.ofData` for elements with alignment <= 4 because as
                 // of this writing TeaVM does not guarantee 64 bit items are aligned on 8 byte boundaries.
                 if realloc.is_none() && size <= 4 {
-                    results.push(format!("Address.ofData({op}).toInt()"));
+                    results.push(format!("org.teavm.interop.Address.ofData({op}).toInt()"));
                 } else {
                     let address = self.locals.tmp("address");
                     let ty = ty.to_upper_camel_case();
@@ -1579,7 +1581,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                     uwrite!(
                         self.src,
                         "
-                        Address {address} = Memory.malloc({size} * ({op}).length, {size});
+                        org.teavm.interop.Address {address} = Memory.malloc({size} * ({op}).length, {size});
                         Memory.put{ty}s({address}, {op}, 0, ({op}).length);
                         "
                     );
@@ -1608,7 +1610,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                     self.src,
                     "
                     {ty}[] {array} = new {ty}[{length}];
-                    Memory.get{ty_upper}s(Address.fromInt({address}), {array}, 0, ({array}).length);
+                    Memory.get{ty_upper}s(org.teavm.interop.Address.fromInt({address}), {array}, 0, ({array}).length);
                     "
                 );
 
@@ -1624,14 +1626,14 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                 );
 
                 if realloc.is_none() {
-                    results.push(format!("Address.ofData({bytes}).toInt()"));
+                    results.push(format!("org.teavm.interop.Address.ofData({bytes}).toInt()"));
                 } else {
                     let address = self.locals.tmp("address");
 
                     uwrite!(
                         self.src,
                         "
-                        Address {address} = Memory.malloc({bytes}.length, 1);
+                        org.teavm.interop.Address {address} = Memory.malloc({bytes}.length, 1);
                         Memory.putBytes({address}, {bytes}, 0, {bytes}.length);
                         "
                     );
@@ -1650,7 +1652,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                     self.src,
                     "
                     byte[] {bytes} = new byte[{length}];
-                    Memory.getBytes(Address.fromInt({address}), {bytes}, 0, {length});
+                    Memory.getBytes(org.teavm.interop.Address.fromInt({address}), {bytes}, 0, {length});
                     "
                 );
 
@@ -1726,7 +1728,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                         {body}
                         {array}.add({result});
                     }}
-                    Memory.free(Address.fromInt({address}), ({length}) * {size}, {align});
+                    Memory.free(org.teavm.interop.Address.fromInt({address}), ({length}) * {size}, {align});
                     "
                 );
 
@@ -1831,7 +1833,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                 {
                     uwriteln!(
                         self.src,
-                        "Memory.free(Address.fromInt({address}), {size}, {align});"
+                        "Memory.free(org.teavm.interop.Address.fromInt({address}), {size}, {align});"
                     );
                 }
 
@@ -1840,7 +1842,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                         self.src,
                         "
                         for ({}Cleanup cleanup : cleanupList) {{
-                            Memory.free(Address.fromInt(cleanup.address), cleanup.size, cleanup.align);
+                            Memory.free(org.teavm.interop.Address.fromInt(cleanup.address), cleanup.size, cleanup.align);
                         }}
                         ",
                         self.gen.gen.qualifier()
@@ -1864,42 +1866,42 @@ impl Bindgen for FunctionBindgen<'_, '_> {
             Instruction::I32Load { offset }
             | Instruction::PointerLoad { offset }
             | Instruction::LengthLoad { offset } => results.push(format!(
-                "Address.fromInt(({}) + {offset}).getInt()",
+                "org.teavm.interop.Address.fromInt(({}) + {offset}).getInt()",
                 operands[0]
             )),
 
             Instruction::I32Load8U { offset } => results.push(format!(
-                "(((int) Address.fromInt(({}) + {offset}).getByte()) & 0xFF)",
+                "(((int) org.teavm.interop.Address.fromInt(({}) + {offset}).getByte()) & 0xFF)",
                 operands[0]
             )),
 
             Instruction::I32Load8S { offset } => results.push(format!(
-                "((int) Address.fromInt(({}) + {offset}).getByte())",
+                "((int) org.teavm.interop.Address.fromInt(({}) + {offset}).getByte())",
                 operands[0]
             )),
 
             Instruction::I32Load16U { offset } => results.push(format!(
-                "(((int) Address.fromInt(({}) + {offset}).getShort()) & 0xFFFF)",
+                "(((int) org.teavm.interop.Address.fromInt(({}) + {offset}).getShort()) & 0xFFFF)",
                 operands[0]
             )),
 
             Instruction::I32Load16S { offset } => results.push(format!(
-                "((int) Address.fromInt(({}) + {offset}).getShort())",
+                "((int) org.teavm.interop.Address.fromInt(({}) + {offset}).getShort())",
                 operands[0]
             )),
 
             Instruction::I64Load { offset } => results.push(format!(
-                "Address.fromInt(({}) + {offset}).getLong()",
+                "org.teavm.interop.Address.fromInt(({}) + {offset}).getLong()",
                 operands[0]
             )),
 
             Instruction::F32Load { offset } => results.push(format!(
-                "Address.fromInt(({}) + {offset}).getFloat()",
+                "org.teavm.interop.Address.fromInt(({}) + {offset}).getFloat()",
                 operands[0]
             )),
 
             Instruction::F64Load { offset } => results.push(format!(
-                "Address.fromInt(({}) + {offset}).getDouble()",
+                "org.teavm.interop.Address.fromInt(({}) + {offset}).getDouble()",
                 operands[0]
             )),
 
@@ -1907,42 +1909,42 @@ impl Bindgen for FunctionBindgen<'_, '_> {
             | Instruction::PointerStore { offset }
             | Instruction::LengthStore { offset } => uwriteln!(
                 self.src,
-                "Address.fromInt(({}) + {offset}).putInt({});",
+                "org.teavm.interop.Address.fromInt(({}) + {offset}).putInt({});",
                 operands[1],
                 operands[0]
             ),
 
             Instruction::I32Store8 { offset } => uwriteln!(
                 self.src,
-                "Address.fromInt(({}) + {offset}).putByte((byte) ({}));",
+                "org.teavm.interop.Address.fromInt(({}) + {offset}).putByte((byte) ({}));",
                 operands[1],
                 operands[0]
             ),
 
             Instruction::I32Store16 { offset } => uwriteln!(
                 self.src,
-                "Address.fromInt(({}) + {offset}).putShort((short) ({}));",
+                "org.teavm.interop.Address.fromInt(({}) + {offset}).putShort((short) ({}));",
                 operands[1],
                 operands[0]
             ),
 
             Instruction::I64Store { offset } => uwriteln!(
                 self.src,
-                "Address.fromInt(({}) + {offset}).putLong({});",
+                "org.teavm.interop.Address.fromInt(({}) + {offset}).putLong({});",
                 operands[1],
                 operands[0]
             ),
 
             Instruction::F32Store { offset } => uwriteln!(
                 self.src,
-                "Address.fromInt(({}) + {offset}).putFloat({});",
+                "org.teavm.interop.Address.fromInt(({}) + {offset}).putFloat({});",
                 operands[1],
                 operands[0]
             ),
 
             Instruction::F64Store { offset } => uwriteln!(
                 self.src,
-                "Address.fromInt(({}) + {offset}).putDouble({});",
+                "org.teavm.interop.Address.fromInt(({}) + {offset}).putDouble({});",
                 operands[1],
                 operands[0]
             ),
@@ -1952,14 +1954,14 @@ impl Bindgen for FunctionBindgen<'_, '_> {
             Instruction::GuestDeallocate { size, align } => {
                 uwriteln!(
                     self.src,
-                    "Memory.free(Address.fromInt({}), {size}, {align});",
+                    "Memory.free(org.teavm.interop.Address.fromInt({}), {size}, {align});",
                     operands[0]
                 )
             }
 
             Instruction::GuestDeallocateString => uwriteln!(
                 self.src,
-                "Memory.free(Address.fromInt({}), {}, 1);",
+                "Memory.free(org.teavm.interop.Address.fromInt({}), {}, 1);",
                 operands[0],
                 operands[1]
             ),
@@ -2025,7 +2027,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
 
                 uwriteln!(
                     self.src,
-                    "Memory.free(Address.fromInt({address}), ({length}) * {size}, {align});"
+                    "Memory.free(org.teavm.interop.Address.fromInt({address}), ({length}) * {size}, {align});"
                 );
             }
 
@@ -2033,6 +2035,14 @@ impl Bindgen for FunctionBindgen<'_, '_> {
             | Instruction::AsyncCallStart { .. }
             | Instruction::AsyncPostCallInterface { .. }
             | Instruction::AsyncCallReturn { .. } => todo!(),
+            Instruction::FutureLower { .. } => todo!(),
+            Instruction::FutureLift { .. } => todo!(),
+            Instruction::StreamLower { .. } => todo!(),
+            Instruction::StreamLift { .. } => todo!(),
+            Instruction::ErrorLower { .. } => todo!(),
+            Instruction::ErrorLift { .. } => todo!(),
+            Instruction::AsyncCallWasm { .. } => todo!(),
+            Instruction::Flush { .. } => todo!(),
         }
     }
 
@@ -2169,8 +2179,8 @@ fn list_element_info(ty: &Type) -> (usize, &'static str) {
         Type::U16 | Type::S16 => (2, "short"),
         Type::U32 | Type::S32 => (4, "int"),
         Type::U64 | Type::S64 => (8, "long"),
-        Type::Float32 => (4, "float"),
-        Type::Float64 => (8, "double"),
+        Type::F32 => (4, "float"),
+        Type::F64 => (8, "double"),
         _ => unreachable!(),
     }
 }
@@ -2214,8 +2224,8 @@ fn is_primitive(ty: &Type) -> bool {
             | Type::S32
             | Type::U64
             | Type::S64
-            | Type::Float32
-            | Type::Float64
+            | Type::F32
+            | Type::F64
     )
 }
 

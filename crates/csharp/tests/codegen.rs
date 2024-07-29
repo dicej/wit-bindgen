@@ -15,64 +15,16 @@ macro_rules! codegen_test {
                 "guest-csharp",
                 $test.as_ref(),
                 |resolve, world, files| {
-                    if [
-                        "conventions",
-                        "guest-name",
-                        "import-and-export-resource",
-                        "import-and-export-resource-alias",
-                        "import-func",
-                        "integers",
-                        "issue544",
-                        "issue551",
-                        "issue569",
-                        "issue573",
-                        "issue607",
-                        "issue668",
-                        "just-export",
-                        "keywords",
-                        "lift-lower-foreign",
-                        "lists",
-                        "many-arguments",
-                        "option-result",
-                        "rename-interface",
-                        "resource-alias",
-                        "resource-borrow-in-record",
-                        "resource-borrow-in-record-export",
-                        "resource-local-alias",
-                        "resource-local-alias-borrow",
-                        "resource-local-alias-borrow-import",
-                        "resource-own-in-other-interface",
-                        "resources",
-                        "resources-in-aggregates",
-                        "resources-with-lists",
-                        "result-empty",
-                        "ret-areas",
-                        "return-resource-from-export",
-                        "same-names5",
-                        "simple-functions",
-                        "simple-http",
-                        "simple-lists",
-                        "small-anonymous",
-                        "unused-import",
-                        "use-across-interfaces",
-                        "variants",
-                        "variants-unioning-types",
-                        "worlds-with-types",
-                        "zero-size-tuple",
-                        "go_params",
-                    ]
-                    .contains(&$name)
-                    {
-                        return;
-                    }
-                    #[cfg(any(all(target_os = "windows", feature = "aot"), feature = "mono"))]
+                    #[cfg(any(feature = "aot", feature = "mono"))]
                     wit_bindgen_csharp::Opts {
                         generate_stub: true,
                         string_encoding: StringEncoding::UTF8,
-                        #[cfg(all(target_os = "windows", feature = "aot"))]
+                        #[cfg(feature = "aot")]
                         runtime: Default::default(),
                         #[cfg(feature = "mono")]
                         runtime: wit_bindgen_csharp::CSharpRuntime::Mono,
+                        internal: false,
+                        skip_support_files: false,
                     }
                     .build()
                     .generate(resolve, world, files)
@@ -86,7 +38,7 @@ macro_rules! codegen_test {
 test_helpers::codegen_tests!();
 
 fn verify(dir: &Path, name: &str) {
-    #[cfg(all(target_os = "windows", feature = "aot"))]
+    #[cfg(feature = "aot")]
     aot_verify(dir, name);
 
     #[cfg(feature = "mono")]
@@ -177,7 +129,7 @@ fn mono_verify(dir: &Path, name: &str) {
     let wasm_filename = dir.join(name);
 
     cmd.arg("build")
-        .arg(dir.join(format!("TheWorld.csproj")))
+        .arg(dir.join(format!("TheWorldWorld.csproj")))
         .arg("-c")
         .arg("Debug")
         .arg("-o")

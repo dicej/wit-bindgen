@@ -3,11 +3,14 @@
 
 mod codegen_tests {
     macro_rules! codegen_test {
+        (wasi_cli $name:tt $test:tt) => {};
+        (wasi_http $name:tt $test:tt) => {};
         ($id:ident $name:tt $test:tt) => {
             mod $id {
                 wit_bindgen::generate!({
                     path: $test,
-                    stubs
+                    stubs,
+                    generate_all
                 });
 
                 // This empty module named 'core' is here to catch module path
@@ -27,6 +30,7 @@ mod codegen_tests {
                         },
                         stubs,
                         export_prefix: "[borrowed]",
+                        generate_all
                     });
 
                     #[test]
@@ -41,6 +45,7 @@ mod codegen_tests {
                         },
                         stubs,
                         export_prefix: "[duplicate]",
+                        generate_all
                     });
 
                     #[test]
@@ -340,6 +345,7 @@ mod custom_derives {
     use exports::my::inline::blah::Foo;
 
     struct Component;
+
     impl exports::my::inline::blah::Guest for Component {
         fn bar(cool: Foo) {
             // Check that built in derives that I've added actually work by seeing that this hashes
@@ -451,4 +457,118 @@ mod with_and_resources {
             ",
         });
     }
+}
+
+#[allow(unused)]
+mod generate_unused_types {
+    use exports::foo::bar::component::UnusedEnum;
+    use exports::foo::bar::component::UnusedRecord;
+    use exports::foo::bar::component::UnusedVariant;
+
+    wit_bindgen::generate!({
+        inline: "
+            package foo:bar;
+
+            world bindings {
+                export component;
+            }
+
+            interface component {
+                variant unused-variant {
+                    %enum(unused-enum),
+                    %record(unused-record)
+                }
+                enum unused-enum {
+                    unused
+                }
+                record unused-record {
+                    x: u32
+                }
+            }
+        ",
+        generate_unused_types: true,
+    });
+}
+
+#[allow(unused)]
+mod gated_features {
+    wit_bindgen::generate!({
+        inline: r#"
+            package foo:bar;
+
+            world bindings {
+                @unstable(feature = x)
+                import x: func();
+                @unstable(feature = y)
+                import y: func();
+                @since(version = 1.2.3)
+                import z: func();
+            }
+        "#,
+        features: ["y"],
+    });
+
+    fn _foo() {
+        y();
+        z();
+    }
+}
+
+#[allow(unused)]
+mod simple_with_option {
+    mod a {
+        wit_bindgen::generate!({
+            inline: r#"
+                package foo:bar {
+                    interface a {
+                        x: func();
+                    }
+                }
+
+                package foo:baz {
+                    world w {
+                        import foo:bar/a;
+                    }
+                }
+            "#,
+            world: "foo:baz/w",
+            generate_all,
+        });
+    }
+
+    mod b {
+        wit_bindgen::generate!({
+            inline: r#"
+                package foo:bar {
+                    interface a {
+                        x: func();
+                    }
+                }
+
+                package foo:baz {
+                    world w {
+                        import foo:bar/a;
+                    }
+                }
+            "#,
+            world: "foo:baz/w",
+            with: { "foo:bar/a": generate },
+        });
+    }
+}
+
+#[allow(unused)]
+mod multiple_paths {
+    wit_bindgen::generate!({
+        inline: r#"
+        package test:paths;
+
+        world test {
+            import paths:path1/test;
+            export paths:path2/test;
+        }
+        "#,
+        path: ["tests/wit/path1", "tests/wit/path2"],
+        generate_all,
+    });
 }

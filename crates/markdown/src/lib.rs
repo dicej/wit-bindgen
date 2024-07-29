@@ -43,7 +43,7 @@ impl WorldGenerator for Markdown {
         let world = &resolve.worlds[world];
         uwriteln!(
             self.src,
-            "# <a name=\"{}\">World {}</a>\n",
+            "# <a id=\"{}\"></a>World {}\n",
             world.name.to_snake_case(),
             world.name
         );
@@ -66,7 +66,7 @@ impl WorldGenerator for Markdown {
             }
             let name = &resolve.name_world_key(name);
             match import {
-                WorldItem::Interface(_) => {
+                WorldItem::Interface { .. } => {
                     gen.push_str("    - interface `");
                     gen.push_str(name);
                     gen.push_str("`\n");
@@ -91,7 +91,7 @@ impl WorldGenerator for Markdown {
             }
             let name = &resolve.name_world_key(name);
             match export {
-                WorldItem::Interface(_) => {
+                WorldItem::Interface { .. } => {
                     gen.push_str("    - interface `");
                     gen.push_str(name);
                     gen.push_str("`\n");
@@ -117,11 +117,11 @@ impl WorldGenerator for Markdown {
         name: &WorldKey,
         id: InterfaceId,
         _files: &mut Files,
-    ) {
+    ) -> Result<()> {
         let name = resolve.name_world_key(name);
         uwriteln!(
             self.src,
-            "## <a name=\"{}\"></a>Import interface {name}\n",
+            "## <a id=\"{}\"></a>Import interface {name}\n",
             name.to_snake_case()
         );
         self.hrefs
@@ -131,6 +131,8 @@ impl WorldGenerator for Markdown {
         gen.push_str("\n");
         gen.types(id);
         gen.funcs(id);
+
+        Ok(())
     }
 
     fn import_funcs(
@@ -158,7 +160,7 @@ impl WorldGenerator for Markdown {
         let name = resolve.name_world_key(name);
         uwriteln!(
             self.src,
-            "## <a name=\"{}\"></a>Export interface {name}\n",
+            "## <a id=\"{}\"></a>Export interface {name}\n",
             name.to_snake_case()
         );
         self.hrefs
@@ -263,7 +265,7 @@ impl InterfaceGenerator<'_> {
 
     fn func(&mut self, func: &Function) {
         self.push_str(&format!(
-            "#### <a name=\"{0}\"></a>`",
+            "#### <a id=\"{0}\"></a>`",
             func.name.to_snake_case()
         ));
         self.gen
@@ -279,7 +281,7 @@ impl InterfaceGenerator<'_> {
             self.push_str("##### Params\n\n");
             for (name, ty) in func.params.iter() {
                 self.push_str(&format!(
-                    "- <a name=\"{f}.{p}\"></a>`{}`: ",
+                    "- <a id=\"{f}.{p}\"></a>`{}`: ",
                     name,
                     f = func.name.to_snake_case(),
                     p = name.to_snake_case(),
@@ -295,7 +297,7 @@ impl InterfaceGenerator<'_> {
                 Results::Named(params) => {
                     for (name, ty) in params.iter() {
                         self.push_str(&format!(
-                            "- <a name=\"{f}.{p}\"></a>`{}`: ",
+                            "- <a id=\"{f}.{p}\"></a>`{}`: ",
                             name,
                             f = func.name.to_snake_case(),
                             p = name,
@@ -306,7 +308,7 @@ impl InterfaceGenerator<'_> {
                 }
                 Results::Anon(ty) => {
                     self.push_str(&format!(
-                        "- <a name=\"{f}.0\"></a> ",
+                        "- <a id=\"{f}.0\"></a> ",
                         f = func.name.to_snake_case(),
                     ));
                     self.print_ty(ty);
@@ -333,8 +335,8 @@ impl InterfaceGenerator<'_> {
             Type::S32 => self.push_str("`s32`"),
             Type::U64 => self.push_str("`u64`"),
             Type::S64 => self.push_str("`s64`"),
-            Type::Float32 => self.push_str("`float32`"),
-            Type::Float64 => self.push_str("`float64`"),
+            Type::F32 => self.push_str("`f32`"),
+            Type::F64 => self.push_str("`f64`"),
             Type::Char => self.push_str("`char`"),
             Type::String => self.push_str("`string`"),
             Type::Id(id) => {
@@ -411,28 +413,11 @@ impl InterfaceGenerator<'_> {
                             self.push_str("future");
                         }
                     },
-                    TypeDefKind::Stream(s) => match (s.element, s.end) {
-                        (Some(element), Some(end)) => {
-                            self.push_str("stream<");
-                            self.print_ty(&element);
-                            self.push_str(", ");
-                            self.print_ty(&end);
-                            self.push_str(">");
-                        }
-                        (None, Some(end)) => {
-                            self.push_str("stream<_, ");
-                            self.print_ty(&end);
-                            self.push_str(">");
-                        }
-                        (Some(element), None) => {
-                            self.push_str("stream<");
-                            self.print_ty(&element);
-                            self.push_str(">");
-                        }
-                        (None, None) => {
-                            self.push_str("stream");
-                        }
-                    },
+                    TypeDefKind::Stream(s) => {
+                        self.push_str("stream<");
+                        self.print_ty(s);
+                        self.push_str(">");
+                    }
                     TypeDefKind::Handle(Handle::Own(ty)) => {
                         self.push_str("own<");
                         self.print_ty(&Type::Id(*ty));
@@ -444,6 +429,7 @@ impl InterfaceGenerator<'_> {
                         self.push_str(">");
                     }
                     TypeDefKind::Unknown => unreachable!(),
+                    TypeDefKind::Error => todo!(),
                 }
             }
         }
@@ -467,7 +453,7 @@ impl InterfaceGenerator<'_> {
             self.types_header_printed = true;
         }
         self.push_str(&format!(
-            "#### <a name=\"{}\"></a>`{} {}`\n",
+            "#### <a id=\"{}\"></a>`{} {}`\n",
             name.to_snake_case(),
             type_,
             name,
@@ -490,7 +476,7 @@ impl<'a> wit_bindgen_core::InterfaceGenerator<'a> for InterfaceGenerator<'a> {
         self.push_str("\n##### Record Fields\n\n");
         for field in record.fields.iter() {
             self.push_str(&format!(
-                "- <a name=\"{r}.{f}\"></a>`{name}`: ",
+                "- <a id=\"{r}.{f}\"></a>`{name}`: ",
                 r = name.to_snake_case(),
                 f = field.name.to_snake_case(),
                 name = field.name,
@@ -523,7 +509,7 @@ impl<'a> wit_bindgen_core::InterfaceGenerator<'a> for InterfaceGenerator<'a> {
         self.push_str("\n##### Tuple Fields\n\n");
         for (i, ty) in tuple.types.iter().enumerate() {
             self.push_str(&format!(
-                "- <a name=\"{r}.{f}\"></a>`{name}`: ",
+                "- <a id=\"{r}.{f}\"></a>`{name}`: ",
                 r = name.to_snake_case(),
                 f = i,
                 name = i,
@@ -544,7 +530,7 @@ impl<'a> wit_bindgen_core::InterfaceGenerator<'a> for InterfaceGenerator<'a> {
         self.push_str("\n##### Flags members\n\n");
         for flag in flags.flags.iter() {
             self.push_str(&format!(
-                "- <a name=\"{r}.{f}\"></a>`{name}`: ",
+                "- <a id=\"{r}.{f}\"></a>`{name}`: ",
                 r = name.to_snake_case(),
                 f = flag.name.to_snake_case(),
                 name = flag.name,
@@ -570,7 +556,7 @@ impl<'a> wit_bindgen_core::InterfaceGenerator<'a> for InterfaceGenerator<'a> {
         self.push_str("\n##### Variant Cases\n\n");
         for case in variant.cases.iter() {
             self.push_str(&format!(
-                "- <a name=\"{v}.{c}\"></a>`{name}`",
+                "- <a id=\"{v}.{c}\"></a>`{name}`",
                 v = name.to_snake_case(),
                 c = case.name.to_snake_case(),
                 name = case.name,
@@ -600,7 +586,7 @@ impl<'a> wit_bindgen_core::InterfaceGenerator<'a> for InterfaceGenerator<'a> {
         self.push_str("\n##### Enum Cases\n\n");
         for case in enum_.cases.iter() {
             self.push_str(&format!(
-                "- <a name=\"{v}.{c}\"></a>`{name}`",
+                "- <a id=\"{v}.{c}\"></a>`{name}`",
                 v = name.to_snake_case(),
                 c = case.name.to_snake_case(),
                 name = case.name,

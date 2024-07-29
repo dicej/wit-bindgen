@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use wasmtime::{component::Resource, Store};
 
 use self::test::resource_with_lists::test::{Host, HostThing, Thing};
-use crate::resource_with_lists::exports::test::resource_with_lists::test::Test;
+use crate::resource_with_lists::exports::test::resource_with_lists::test::Guest;
 
 wasmtime::component::bindgen!(in "tests/runtime/resource_with_lists");
 
@@ -15,34 +15,33 @@ pub struct MyHostThing {
 impl Host for MyHostThing {}
 
 impl HostThing for MyHostThing {
-    fn new(&mut self, l: Vec<u8>) -> wasmtime::Result<Resource<Thing>> {
+    fn new(&mut self, l: Vec<u8>) -> Resource<Thing> {
         let id = self.next_id;
         self.next_id += 1;
         let mut result = l.clone();
         result.extend_from_slice(" HostThing".as_bytes());
         self.map_l.insert(id, result);
-        Ok(Resource::new_own(id))
+        Resource::new_own(id)
     }
 
-    fn foo(&mut self, self_: Resource<Thing>) -> wasmtime::Result<Vec<u8>> {
+    fn foo(&mut self, self_: Resource<Thing>) -> Vec<u8> {
         let id = self_.rep();
         let mut list = self.map_l[&id].clone();
         list.extend_from_slice(" HostThing.foo".as_bytes());
-        Ok(list)
+        list
     }
 
-    fn bar(&mut self, self_: Resource<Thing>, l: Vec<u8>) -> wasmtime::Result<()> {
+    fn bar(&mut self, self_: Resource<Thing>, l: Vec<u8>) {
         let id = self_.rep();
         let mut result = l.clone();
         result.extend_from_slice(" HostThing.bar".as_bytes());
         self.map_l.insert(id, result);
-        Ok(())
     }
 
-    fn baz(&mut self, l: Vec<u8>) -> wasmtime::Result<Vec<u8>> {
+    fn baz(&mut self, l: Vec<u8>) -> Vec<u8> {
         let mut result = l.clone();
         result.extend_from_slice(" HostThing.baz".as_bytes());
-        Ok(result)
+        result
     }
 
     fn drop(&mut self, rep: Resource<Thing>) -> wasmtime::Result<()> {
@@ -65,7 +64,7 @@ fn run() -> anyhow::Result<()> {
     )
 }
 
-fn run_test(exports: Test, store: &mut Store<crate::Wasi<MyHostThing>>) -> anyhow::Result<()> {
+fn run_test(exports: Guest, store: &mut Store<crate::Wasi<MyHostThing>>) -> anyhow::Result<()> {
     let thing = exports.thing();
 
     let hi_encoded = "Hi".as_bytes().to_vec();

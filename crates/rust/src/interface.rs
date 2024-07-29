@@ -9,7 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::mem;
 use wit_bindgen_core::abi::{self, AbiVariant, LiftLower};
-use wit_bindgen_core::{dealias, uwrite, uwriteln, wit_parser::*, Source, TypeInfo};
+use wit_bindgen_core::{
+    dealias, uwrite, uwriteln, wit_parser::*, AnonymousTypeGenerator, Source, TypeInfo,
+};
 
 pub struct InterfaceGenerator<'a> {
     pub src: Source,
@@ -516,6 +518,7 @@ macro_rules! {macro_name} {{
                             },
                             results: Results::Anon(Type::Id(self.gen.unit_result.unwrap())),
                             docs: Default::default(),
+                            stability: Stability::default(),
                         };
                         let old = mem::take(&mut self.src);
                         self.generate_guest_import_body(
@@ -536,6 +539,7 @@ macro_rules! {macro_name} {{
                             params: vec![("receiver".into(), Type::U32)],
                             results: Results::Anon(Type::Id(payload_result)),
                             docs: Default::default(),
+                            stability: Stability::default(),
                         };
                         let old = mem::take(&mut self.src);
                         self.generate_guest_import_body(
@@ -649,6 +653,7 @@ impl {async_support}::FuturePayload for {name} {{
                             params: vec![("sender".into(), Type::U32), ("values".into(), *list_ty)],
                             results: Results::Anon(Type::Id(self.gen.unit_result.unwrap())),
                             docs: Default::default(),
+                            stability: Stability::default(),
                         };
                         let old = mem::take(&mut self.src);
                         self.generate_guest_import_body(
@@ -665,6 +670,7 @@ impl {async_support}::FuturePayload for {name} {{
                             params: vec![("receiver".into(), Type::U32)],
                             results: Results::Anon(Type::Id(payload_result)),
                             docs: Default::default(),
+                            stability: Stability::default(),
                         };
                         let old_src = mem::take(&mut self.src);
                         self.generate_guest_import_body(
@@ -1600,101 +1606,12 @@ impl {async_support}::StreamPayload for {name} {{
             return;
         }
 
-        match &ty.kind {
-            TypeDefKind::List(t) => self.print_list(t, mode),
-
-            TypeDefKind::Option(t) => {
-                self.push_str("Option<");
-                let mode = self.filter_mode_preserve_top(t, mode);
-                self.print_ty(t, mode);
-                self.push_str(">");
-            }
-
-            TypeDefKind::Result(r) => {
-                self.push_str("Result<");
-                self.print_optional_ty(r.ok.as_ref(), mode);
-                self.push_str(",");
-                self.print_optional_ty(r.err.as_ref(), mode);
-                self.push_str(">");
-            }
-
-            TypeDefKind::Variant(_) => panic!("unsupported anonymous variant"),
-
-            // Tuple-like records are mapped directly to Rust tuples of
-            // types. Note the trailing comma after each member to
-            // appropriately handle 1-tuples.
-            TypeDefKind::Tuple(t) => {
-                self.push_str("(");
-                for ty in t.types.iter() {
-                    let mode = self.filter_mode_preserve_top(ty, mode);
-                    self.print_ty(ty, mode);
-                    self.push_str(",");
-                }
-                self.push_str(")");
-            }
-            TypeDefKind::Resource => {
-                panic!("unsupported anonymous type reference: resource")
-            }
-            TypeDefKind::Record(_) => {
-                panic!("unsupported anonymous type reference: record")
-            }
-            TypeDefKind::Flags(_) => {
-                panic!("unsupported anonymous type reference: flags")
-            }
-            TypeDefKind::Enum(_) => {
-                panic!("unsupported anonymous type reference: enum")
-            }
-            TypeDefKind::Future(ty) => {
-                let async_support = self.path_to_async_support();
-                uwrite!(self.src, "{async_support}::FutureReceiver<");
-                self.print_optional_ty(ty.as_ref(), mode);
-                self.push_str(">");
-            }
-            TypeDefKind::Stream(ty) => {
-                let async_support = self.path_to_async_support();
-                uwrite!(self.src, "{async_support}::StreamReceiver<");
-                self.print_ty(ty, mode);
-                self.push_str(">");
-            }
-            TypeDefKind::Error => {
-                let async_support = self.path_to_async_support();
-                uwrite!(self.src, "{async_support}::Error");
-            }
-
-            TypeDefKind::Handle(Handle::Own(ty)) => {
-                self.print_ty(&Type::Id(*ty), mode);
-            }
-
-            TypeDefKind::Handle(Handle::Borrow(ty)) => {
-                assert!(mode.lifetime.is_some());
-                let lt = mode.lifetime.unwrap();
-                if self.is_exported_resource(*ty) {
-                    let camel = self.resolve.types[*ty]
-                        .name
-                        .as_deref()
-                        .unwrap()
-                        .to_upper_camel_case();
-                    let name = format!("{camel}Borrow");
-                    self.push_str(&self.type_path_with_name(*ty, name));
-                    self.push_str("<");
-                    self.push_str(lt);
-                    self.push_str(">");
-                } else {
-                    self.push_str("&");
-                    if lt != "'_" {
-                        self.push_str(lt);
-                        self.push_str(" ");
-                    }
-                    let ty = &Type::Id(*ty);
-                    let mode = self.filter_mode(ty, mode);
-                    self.print_ty(ty, mode);
-                }
-            }
-
-            TypeDefKind::Type(t) => self.print_ty(t, mode),
-
-            TypeDefKind::Unknown => unreachable!(),
-        }
+        let mut anonymous_type_gen = AnonTypeGenerator {
+            mode,
+            resolve: self.resolve,
+            interface: self,
+        };
+        anonymous_type_gen.define_anonymous_type(id);
     }
 
     fn print_list(&mut self, ty: &Type, mode: TypeMode) {
@@ -1735,12 +1652,13 @@ impl {async_support}::StreamPayload for {name} {{
 
     fn modes_of(&self, ty: TypeId) -> Vec<(String, TypeMode)> {
         let info = self.info(ty);
-        // If this type isn't actually used, no need to generate it.
-        if !info.owned && !info.borrowed {
-            return Vec::new();
-        }
         let mut result = Vec::new();
-
+        if !self.gen.opts.generate_unused_types {
+            // If this type isn't actually used, no need to generate it.
+            if !info.owned && !info.borrowed {
+                return result;
+            }
+        }
         // Generate one mode for when the type is owned and another for when
         // it's borrowed.
         let a = self.type_mode_for_id(ty, TypeOwnershipStyle::Owned, "'a");
@@ -2629,7 +2547,8 @@ impl<'a> {camel}Borrow<'a>{{
             self.src,
             r#"
                 impl {name} {{
-                    pub(crate) unsafe fn _lift(val: {repr}) -> {name} {{
+                    #[doc(hidden)]
+                    pub unsafe fn _lift(val: {repr}) -> {name} {{
                         if !cfg!(debug_assertions) {{
                             return ::core::mem::transmute(val);
                         }}
@@ -2666,5 +2585,105 @@ impl<'a> {camel}Borrow<'a>{{
         self.src.push_str(" = ");
         self.print_ty(ty, TypeMode::owned());
         self.src.push_str(";\n");
+    }
+}
+
+struct AnonTypeGenerator<'a, 'b> {
+    mode: TypeMode,
+    resolve: &'a Resolve,
+    interface: &'a mut InterfaceGenerator<'b>,
+}
+
+impl<'a, 'b> wit_bindgen_core::AnonymousTypeGenerator<'a> for AnonTypeGenerator<'a, 'b> {
+    fn resolve(&self) -> &'a Resolve {
+        self.resolve
+    }
+
+    fn anonymous_typ_type(&mut self, _id: TypeId, ty: &Type, _docs: &Docs) {
+        self.interface.print_ty(ty, self.mode);
+    }
+
+    fn anonymous_type_handle(&mut self, _id: TypeId, handle: &Handle, _docs: &Docs) {
+        match handle {
+            Handle::Own(ty) => {
+                self.interface.print_ty(&Type::Id(*ty), self.mode);
+            }
+            Handle::Borrow(ty) => {
+                assert!(self.mode.lifetime.is_some());
+                let lt = self.mode.lifetime.unwrap();
+                if self.interface.is_exported_resource(*ty) {
+                    let camel = self.resolve.types[*ty]
+                        .name
+                        .as_deref()
+                        .unwrap()
+                        .to_upper_camel_case();
+                    let name = format!("{camel}Borrow");
+                    self.interface
+                        .push_str(&self.interface.type_path_with_name(*ty, name));
+                    self.interface.push_str("<");
+                    self.interface.push_str(lt);
+                    self.interface.push_str(">");
+                } else {
+                    self.interface.push_str("&");
+                    if lt != "'_" {
+                        self.interface.push_str(lt);
+                        self.interface.push_str(" ");
+                    }
+                    let ty = &Type::Id(*ty);
+                    let mode = self.interface.filter_mode(ty, self.mode);
+                    self.interface.print_ty(ty, mode);
+                }
+            }
+        }
+    }
+
+    fn anonymous_type_tuple(&mut self, _id: TypeId, ty: &Tuple, _docs: &Docs) {
+        self.interface.push_str("(");
+        for ty in ty.types.iter() {
+            let mode = self.interface.filter_mode_preserve_top(ty, self.mode);
+            self.interface.print_ty(ty, mode);
+            self.interface.push_str(",");
+        }
+        self.interface.push_str(")");
+    }
+
+    fn anonymous_type_option(&mut self, _id: TypeId, t: &Type, _docs: &Docs) {
+        self.interface.push_str("Option<");
+        let mode = self.interface.filter_mode_preserve_top(t, self.mode);
+        self.interface.print_ty(t, mode);
+        self.interface.push_str(">");
+    }
+
+    fn anonymous_type_result(&mut self, _id: TypeId, r: &Result_, _docs: &Docs) {
+        self.interface.push_str("Result<");
+        self.interface.print_optional_ty(r.ok.as_ref(), self.mode);
+        self.interface.push_str(",");
+        self.interface.print_optional_ty(r.err.as_ref(), self.mode);
+        self.interface.push_str(">");
+    }
+
+    fn anonymous_type_list(&mut self, _id: TypeId, ty: &Type, _docs: &Docs) {
+        self.interface.print_list(ty, self.mode)
+    }
+
+    fn anonymous_type_future(&mut self, _id: TypeId, ty: &Option<Type>, _docs: &Docs) {
+        let async_support = self.interface.path_to_async_support();
+        self.interface
+            .push_str(&format!("{async_support}::FutureReceiver<"));
+        self.interface.print_optional_ty(ty.as_ref(), self.mode);
+        self.interface.push_str(">");
+    }
+
+    fn anonymous_type_stream(&mut self, _id: TypeId, stream: &Type, _docs: &Docs) {
+        let async_support = self.interface.path_to_async_support();
+        self.interface
+            .push_str(&format!("{async_support}::StreamReceiver<"));
+        self.interface.print_ty(stream, self.mode);
+        self.interface.push_str(">");
+    }
+
+    fn anonymous_type_error(&mut self, _id: TypeId, _docs: &Docs) {
+        let async_support = self.interface.path_to_async_support();
+        self.interface.push_str(&format!("{async_support}::Error"));
     }
 }
