@@ -32,11 +32,11 @@ indexmap = "2.0.0"
 prettyplease = "0.2.20"
 syn = { version = "2.0", features = ["printing"] }
 
-wasmparser = { path = "../wasm-tools/crates/wasmparser" }#{ git = "https://github.com/dicej/wasm-tools", branch = "async" }
-wasm-encoder = { path = "../wasm-tools/crates/wasm-encoder" }#{ git = "https://github.com/dicej/wasm-tools", branch = "async" }
-wasm-metadata = { path = "../wasm-tools/crates/wasm-metadata" }#{ git = "https://github.com/dicej/wasm-tools", branch = "async" }
-wit-parser = { path = "../wasm-tools/crates/wit-parser" }#{ git = "https://github.com/dicej/wasm-tools", branch = "async" }
-wit-component = { path = "../wasm-tools/crates/wit-component" }#{ git = "https://github.com/dicej/wasm-tools", branch = "async" }
+wasmparser = { git = "https://github.com/dicej/wasm-tools", branch = "async" }
+wasm-encoder = { git = "https://github.com/dicej/wasm-tools", branch = "async" }
+wasm-metadata = { git = "https://github.com/dicej/wasm-tools", branch = "async" }
+wit-parser = { git = "https://github.com/dicej/wasm-tools", branch = "async" }
+wit-component = { git = "https://github.com/dicej/wasm-tools", branch = "async" }
 
 wit-bindgen-core = { path = 'crates/core', version = '0.32.0' }
 wit-bindgen-c = { path = 'crates/c', version = '0.32.0' }
