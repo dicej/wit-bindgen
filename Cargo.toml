@@ -92,3 +92,10 @@ test-artifacts = { path = 'crates/test-rust-wasm/artifacts' }
 wit-parser = { workspace = true }
 wasmparser = { workspace = true }
 wasm-encoder = { workspace = true }
+
+[patch."https://github.com/dicej/wasm-tools"]
+wasmparser = { path = "../wasm-tools/crates/wasmparser" }
+wasm-encoder = { path = "../wasm-tools/crates/wasm-encoder" }
+wasm-metadata = { path = "../wasm-tools/crates/wasm-metadata" }
+wit-parser = { path = "../wasm-tools/crates/wit-parser" }
+wit-component = { path = "../wasm-tools/crates/wit-component" }

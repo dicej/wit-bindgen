@@ -557,7 +557,7 @@ def_instruction! {
 
         AsyncMalloc { size: usize, align: usize } : [0] => [1],
 
-        AsyncCallWasm { name: &'a str, size: usize, align: usize } : [3] => [0],
+        AsyncCallWasm { name: &'a str, size: usize, align: usize } : [2] => [0],
 
         AsyncCallStart {
             name: &'a str,
@@ -843,7 +843,6 @@ impl<'a, B: Bindgen> Generator<'a, B> {
 
     fn call(&mut self, func: &Function) {
         const MAX_FLAT_PARAMS: usize = 16;
-        const MAX_FLAT_RESULTS: usize = 1;
 
         let sig = self.resolve.wasm_signature(self.variant, func);
 
@@ -932,10 +931,8 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         let ptr = self.stack.pop().unwrap();
                         self.return_pointer = Some(ptr.clone());
                         self.stack.push(ptr);
-                        // ... and another return pointer for the call handle
-                        self.stack.push(self.bindgen.return_pointer(4, 4));
 
-                        assert_eq!(self.stack.len(), 3);
+                        assert_eq!(self.stack.len(), 2);
                         self.emit(&Instruction::AsyncCallWasm {
                             name: &format!("[async]{}", func.name),
                             size: params_size.size_wasm32(),
@@ -1023,41 +1020,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     }
                 };
 
-                if self.async_ {
-                    let mut params = Vec::new();
-                    for (_, ty) in func.params.iter() {
-                        self.resolve.push_flat(ty, &mut params);
-                    }
-
-                    let name = &format!("[async-start]{}", func.name);
-
-                    if params.len() > MAX_FLAT_RESULTS {
-                        let ElementInfo { size, align } = self
-                            .bindgen
-                            .sizes()
-                            .params(func.params.iter().map(|(_, ty)| ty));
-                        let ptr = self
-                            .bindgen
-                            .return_pointer(size.size_wasm32(), align.align_wasm32());
-                        self.stack.push(ptr.clone());
-                        self.emit(&Instruction::AsyncCallStart {
-                            name,
-                            params: &[WasmType::Pointer],
-                            results: &[],
-                        });
-                        self.stack.push(ptr);
-                        read_from_memory(self);
-                    } else {
-                        self.emit(&Instruction::AsyncCallStart {
-                            name,
-                            params: &[],
-                            results: &params,
-                        });
-                        for (_, ty) in func.params.iter() {
-                            self.lift(ty);
-                        }
-                    }
-                } else if !sig.indirect_params {
+                if !sig.indirect_params {
                     // If parameters are not passed indirectly then we lift each
                     // argument in succession from the component wasm types that
                     // make-up the type.

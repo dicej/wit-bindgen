@@ -832,7 +832,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
             }
 
             Instruction::AsyncCallWasm { name, size, align } => {
-                let func = self.declare_import(name, &[WasmType::Pointer; 3], &[WasmType::I32]);
+                let func = self.declare_import(name, &[WasmType::Pointer; 2], &[WasmType::I32]);
 
                 let async_support = self.gen.path_to_async_support();
                 let tmp = self.tmp();
@@ -855,7 +855,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                     self.push_str(&format!("let {result} = "));
                     results.push(result);
                 } else {
-                self.let_results(func.results.len(), results);
+                    self.let_results(func.results.len(), results);
                 };
                 match &func.kind {
                     FunctionKind::Freestanding => {

@@ -877,12 +877,7 @@ impl {async_support}::StreamPayload for {name} {{
                 pub unsafe fn _export_{name_snake}_cabi<T: {trait_name}>\
             ",
         );
-        let params = if async_ {
-            self.push_str("() -> *mut u8");
-            Vec::new()
-        } else {
-            self.print_export_sig(func)
-        };
+        let params = self.print_export_sig(func, async_);
         self.push_str(" {");
 
         if !self.gen.opts.disable_run_ctors_once_workaround {
@@ -931,8 +926,8 @@ impl {async_support}::StreamPayload for {name} {{
                 "\
                     #[doc(hidden)]
                     #[allow(non_snake_case)]
-                    pub unsafe fn __callback_{name_snake}(ctx: *mut u8, event0: i32, event1: i32, event2: i32) -> i32 {{
-                        {async_support}::callback(ctx, event0, event1, event2)
+                    pub unsafe fn __callback_{name_snake}(ctx: *mut u8, event0: i32, event1: i32) -> i32 {{
+                        {async_support}::callback(ctx, event0, event1)
                     }}
                 "
             );
@@ -992,12 +987,7 @@ impl {async_support}::StreamPayload for {name} {{
 ",
         );
 
-        let params = if async_ {
-            self.push_str("() -> *mut u8");
-            Vec::new()
-        } else {
-            self.print_export_sig(func)
-        };
+        let params = self.print_export_sig(func, async_);
         self.push_str(" {\n");
         uwriteln!(
             self.src,
@@ -1012,8 +1002,8 @@ impl {async_support}::StreamPayload for {name} {{
                 self.src,
                 "\
                     #[export_name = \"{export_prefix}[callback]{export_name}\"]
-                    unsafe extern \"C\" fn _callback_{name_snake}(ctx: *mut u8, event0: i32, event1: i32, event2: i32) -> i32 {{
-                        {path_to_self}::__callback_{name_snake}(ctx, event0, event1, event2)
+                    unsafe extern \"C\" fn _callback_{name_snake}(ctx: *mut u8, event0: i32, event1: i32) -> i32 {{
+                        {path_to_self}::__callback_{name_snake}(ctx, event0, event1)
                     }}
                 "
             );
@@ -1036,7 +1026,7 @@ impl {async_support}::StreamPayload for {name} {{
         }
     }
 
-    fn print_export_sig(&mut self, func: &Function) -> Vec<String> {
+    fn print_export_sig(&mut self, func: &Function, async_: bool) -> Vec<String> {
         self.src.push_str("(");
         let sig = self.resolve.wasm_signature(AbiVariant::GuestExport, func);
         let mut params = Vec::new();
@@ -1047,13 +1037,18 @@ impl {async_support}::StreamPayload for {name} {{
         }
         self.src.push_str(")");
 
-        match sig.results.len() {
-            0 => {}
-            1 => {
-                uwrite!(self.src, " -> {}", wasm_type(sig.results[0]));
+        if async_ {
+            self.push_str(" -> *mut u8");
+        } else {
+            match sig.results.len() {
+                0 => {}
+                1 => {
+                    uwrite!(self.src, " -> {}", wasm_type(sig.results[0]));
+                }
+                _ => unimplemented!(),
             }
-            _ => unimplemented!(),
         }
+
         params
     }
 

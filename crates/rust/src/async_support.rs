@@ -72,38 +72,59 @@ pub fn first_poll<T: 'static>(
 }
 
 pub async unsafe fn await_result(
-    import: unsafe extern "C" fn(*mut u8, *mut u8, *mut u8) -> i32,
+    import: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
     params_layout: Layout,
     params: *mut u8,
     results: *mut u8,
-    call: *mut u8,
 ) {
-    const STATUS_NOT_STARTED: i32 = 0;
-    const STATUS_PARAMS_READ: i32 = 1;
-    const STATUS_RESULTS_WRITTEN: i32 = 2;
-    const STATUS_DONE: i32 = 3;
+    const STATUS_NOT_STARTED: u32 = 0;
+    const STATUS_PARAMS_READ: u32 = 1;
+    const STATUS_RESULTS_WRITTEN: u32 = 2;
+    const STATUS_DONE: u32 = 3;
 
-    match import(params, results, call) {
+    let result = import(params, results) as u32;
+    let status = result >> 30;
+    let call = (result & (0b11 << 30)) as i32;
+    match status {
         STATUS_NOT_STARTED => {
             let (tx, rx) = oneshot::channel();
-            CALLS.insert(*call.cast::<i32>(), tx);
+            CALLS.insert(call, tx);
             rx.await.unwrap();
             alloc::dealloc(params, params_layout);
         }
         STATUS_PARAMS_READ => {
             alloc::dealloc(params, params_layout);
             let (tx, rx) = oneshot::channel();
-            CALLS.insert(*call.cast::<i32>(), tx);
+            CALLS.insert(call, tx);
             rx.await.unwrap()
         }
         STATUS_RESULTS_WRITTEN | STATUS_DONE => {
             alloc::dealloc(params, params_layout);
+
+            if status == STATUS_DONE {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    unreachable!();
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    #[link(wasm_import_module = "$root")]
+                    extern "C" {
+                        #[link_name = "[subtask-drop]"]
+                        fn subtask_drop(_: i32);
+                    }
+                    unsafe {
+                        subtask_drop(call);
+                    }
+                }
+            }
         }
         status => unreachable!(),
     }
 }
 
-pub unsafe fn callback(ctx: *mut u8, event0: i32, event1: i32, event2: i32) -> i32 {
+pub unsafe fn callback(ctx: *mut u8, event0: i32, event1: i32) -> i32 {
     const EVENT_CALL_STARTED: i32 = 0;
     const EVENT_CALL_RETURNED: i32 = 1;
     const EVENT_CALL_DONE: i32 = 2;
@@ -386,10 +407,10 @@ fn wait(state: &mut FutureState) {
             #[link_name = "[task-wait]"]
             fn wait(_: *mut i32) -> i32;
         }
-        let mut payload = [0i32; 2];
+        let mut payload = [0i32];
         unsafe {
             let event0 = wait(payload.as_mut_ptr());
-            callback(state as *mut _ as _, event0, payload[0], payload[1]);
+            callback(state as *mut _ as _, event0, payload[0]);
         }
     }
 }
