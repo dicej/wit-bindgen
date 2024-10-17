@@ -84,7 +84,7 @@ pub async unsafe fn await_result(
 
     let result = import(params, results) as u32;
     let status = result >> 30;
-    let call = (result & (0b11 << 30)) as i32;
+    let call = (result & !(0b11 << 30)) as i32;
     match status {
         STATUS_NOT_STARTED => {
             let (tx, rx) = oneshot::channel();
@@ -100,25 +100,6 @@ pub async unsafe fn await_result(
         }
         STATUS_RESULTS_WRITTEN | STATUS_DONE => {
             alloc::dealloc(params, params_layout);
-
-            if status == STATUS_DONE {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    unreachable!();
-                }
-
-                #[cfg(target_arch = "wasm32")]
-                {
-                    #[link(wasm_import_module = "$root")]
-                    extern "C" {
-                        #[link_name = "[subtask-drop]"]
-                        fn subtask_drop(_: i32);
-                    }
-                    unsafe {
-                        subtask_drop(call);
-                    }
-                }
-            }
         }
         status => unreachable!(),
     }
@@ -135,7 +116,7 @@ pub unsafe fn callback(ctx: *mut u8, event0: i32, event1: i32) -> i32 {
             1
         }
         EVENT_CALL_RETURNED | EVENT_CALL_DONE => {
-            if let Some(call) = CALLS.remove(&event1) {
+            let result = if let Some(call) = CALLS.remove(&event1) {
                 call.send(());
 
                 match poll(ctx as *mut FutureState) {
@@ -147,7 +128,28 @@ pub unsafe fn callback(ctx: *mut u8, event0: i32, event1: i32) -> i32 {
                 }
             } else {
                 1
+            };
+
+            if event0 == EVENT_CALL_DONE {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    unreachable!();
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    #[link(wasm_import_module = "$root")]
+                    extern "C" {
+                        #[link_name = "[subtask-drop]"]
+                        fn subtask_drop(_: i32);
+                    }
+                    unsafe {
+                        subtask_drop(event1);
+                    }
+                }
             }
+
+            result
         }
         _ => unreachable!(),
     }
