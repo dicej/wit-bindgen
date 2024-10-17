@@ -1126,7 +1126,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 }
 
                 if let Some(results) = async_results {
-                    let name = &format!("[async-return]{}", func.name);
+                    let name = &format!("[task-return]{}", func.name);
 
                     self.emit(&Instruction::AsyncCallReturn {
                         name,
