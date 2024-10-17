@@ -101,7 +101,7 @@ pub async unsafe fn await_result(
         STATUS_RESULTS_WRITTEN | STATUS_DONE => {
             alloc::dealloc(params, params_layout);
         }
-        status => unreachable!(),
+        _ => unreachable!(),
     }
 }
 
