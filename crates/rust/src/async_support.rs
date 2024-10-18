@@ -396,7 +396,7 @@ pub fn spawn(future: impl Future<Output = ()> + 'static) {
     unsafe { SPAWNED.push(Box::pin(future)) }
 }
 
-fn wait(state: &mut FutureState) {
+fn task_wait(state: &mut FutureState) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         unreachable!();
@@ -428,7 +428,89 @@ pub fn block_on<T: 'static>(future: impl Future<Output = T> + 'static) -> T {
     loop {
         match unsafe { poll(state) } {
             Poll::Ready(()) => break rx.try_recv().unwrap().unwrap(),
-            Poll::Pending => wait(state),
+            Poll::Pending => task_wait(state),
+        }
+    }
+}
+
+fn task_poll(state: &mut FutureState) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        unreachable!();
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        #[link(wasm_import_module = "$root")]
+        extern "C" {
+            #[link_name = "[task-poll]"]
+            fn poll(_: *mut i32) -> i32;
+        }
+        let mut payload = [0i32; 2];
+        unsafe {
+            let got_event = poll(payload.as_mut_ptr()) != 0;
+            if got_event {
+                callback(state as *mut _ as _, payload[0], payload[1]);
+            }
+            got_event
+        }
+    }
+}
+
+// TODO: refactor so `'static` bounds aren't necessary
+pub fn poll_future<T: 'static>(future: impl Future<Output = T> + 'static) -> Option<T> {
+    let (mut tx, mut rx) = oneshot::channel();
+    let state = &mut FutureState(
+        [Box::pin(future.map(move |v| drop(tx.send(v)))) as BoxFuture]
+            .into_iter()
+            .collect(),
+    );
+    loop {
+        match unsafe { poll(state) } {
+            Poll::Ready(()) => break Some(rx.try_recv().unwrap().unwrap()),
+            Poll::Pending => {
+                if !task_poll(state) {
+                    break None;
+                }
+            }
+        }
+    }
+}
+
+pub fn task_yield() {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        unreachable!();
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        #[link(wasm_import_module = "$root")]
+        extern "C" {
+            #[link_name = "[task-yield]"]
+            fn yield_();
+        }
+        unsafe {
+            yield_();
+        }
+    }
+}
+
+pub fn task_backpressure(enabled: bool) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        unreachable!();
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        #[link(wasm_import_module = "$root")]
+        extern "C" {
+            #[link_name = "[task-backpressure]"]
+            fn backpressure(_: i32);
+        }
+        unsafe {
+            backpressure(if enabled { 1 } else { 0 });
         }
     }
 }

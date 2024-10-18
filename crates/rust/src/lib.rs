@@ -390,6 +390,11 @@ impl RustWasm {
     }
 
     fn finish_runtime_module(&mut self) {
+        // TODO: This is a hack because there are currently functions and types in the `async_support` module that
+        // are useful to applications even if the generated bindings don't use it.  We should probably move those
+        // items to a library which the application can add as a dependency.
+        self.rt_module.insert(RuntimeItem::AsyncSupport);
+
         if self.rt_module.is_empty() {
             return;
         }

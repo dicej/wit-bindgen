@@ -936,6 +936,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
+                let params = format!("({params})");
                 let async_support = self.gen.path_to_async_support();
                 uwriteln!(
                     self.src,
