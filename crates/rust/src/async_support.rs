@@ -22,7 +22,7 @@ use {
 
 type BoxFuture = Pin<Box<dyn Future<Output = ()> + 'static>>;
 
-struct FutureState(FuturesUnordered<BoxFuture>);
+struct FutureState(Option<FuturesUnordered<BoxFuture>>);
 
 static mut CALLS: Lazy<HashMap<i32, oneshot::Sender<()>>> = Lazy::new(HashMap::new);
 
@@ -42,16 +42,23 @@ fn dummy_waker() -> Waker {
 
 unsafe fn poll(state: *mut FutureState) -> Poll<()> {
     loop {
-        let poll = pin!((*state).0.next()).poll(&mut Context::from_waker(&dummy_waker()));
+        if let Some(futures) = (*state).0.as_mut() {
+            let poll = futures.poll_next_unpin(&mut Context::from_waker(&dummy_waker()));
 
-        if SPAWNED.is_empty() {
-            match poll {
-                Poll::Ready(Some(())) => (),
-                Poll::Ready(None) => break Poll::Ready(()),
-                Poll::Pending => break Poll::Pending,
+            if SPAWNED.is_empty() {
+                match poll {
+                    Poll::Ready(Some(())) => (),
+                    Poll::Ready(None) => {
+                        (*state).0 = None;
+                        break Poll::Ready(());
+                    }
+                    Poll::Pending => break Poll::Pending,
+                }
+            } else {
+                futures.extend(SPAWNED.drain(..));
             }
         } else {
-            (*state).0.extend(SPAWNED.drain(..));
+            break Poll::Ready(());
         }
     }
 }
@@ -60,11 +67,11 @@ pub fn first_poll<T: 'static>(
     future: impl Future<Output = T> + 'static,
     fun: impl FnOnce(T) + 'static,
 ) -> *mut u8 {
-    let state = Box::into_raw(Box::new(FutureState(
+    let state = Box::into_raw(Box::new(FutureState(Some(
         [Box::pin(future.map(fun)) as BoxFuture]
             .into_iter()
             .collect(),
-    )));
+    ))));
     match unsafe { poll(state) } {
         Poll::Ready(()) => ptr::null_mut(),
         Poll::Pending => state as _,
@@ -113,7 +120,7 @@ pub unsafe fn callback(ctx: *mut u8, event0: i32, event1: i32) -> i32 {
     match event0 {
         EVENT_CALL_STARTED => {
             // TODO: could dealloc params here if we attached the pointer to the call
-            1
+            0
         }
         EVENT_CALL_RETURNED | EVENT_CALL_DONE => {
             let result = if let Some(call) = CALLS.remove(&event1) {
@@ -147,9 +154,11 @@ pub unsafe fn callback(ctx: *mut u8, event0: i32, event1: i32) -> i32 {
                         subtask_drop(event1);
                     }
                 }
-            }
 
-            result
+                result
+            } else {
+                0
+            }
         }
         _ => unreachable!(),
     }
@@ -420,11 +429,11 @@ fn task_wait(state: &mut FutureState) {
 // TODO: refactor so `'static` bounds aren't necessary
 pub fn block_on<T: 'static>(future: impl Future<Output = T> + 'static) -> T {
     let (mut tx, mut rx) = oneshot::channel();
-    let state = &mut FutureState(
+    let state = &mut FutureState(Some(
         [Box::pin(future.map(move |v| drop(tx.send(v)))) as BoxFuture]
             .into_iter()
             .collect(),
-    );
+    ));
     loop {
         match unsafe { poll(state) } {
             Poll::Ready(()) => break rx.try_recv().unwrap().unwrap(),
@@ -460,11 +469,11 @@ fn task_poll(state: &mut FutureState) -> bool {
 // TODO: refactor so `'static` bounds aren't necessary
 pub fn poll_future<T: 'static>(future: impl Future<Output = T> + 'static) -> Option<T> {
     let (mut tx, mut rx) = oneshot::channel();
-    let state = &mut FutureState(
+    let state = &mut FutureState(Some(
         [Box::pin(future.map(move |v| drop(tx.send(v)))) as BoxFuture]
             .into_iter()
             .collect(),
-    );
+    ));
     loop {
         match unsafe { poll(state) } {
             Poll::Ready(()) => break Some(rx.try_recv().unwrap().unwrap()),
