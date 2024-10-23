@@ -123,18 +123,16 @@ pub unsafe fn callback(ctx: *mut u8, event0: i32, event1: i32) -> i32 {
             0
         }
         EVENT_CALL_RETURNED | EVENT_CALL_DONE => {
-            let result = if let Some(call) = CALLS.remove(&event1) {
+            if let Some(call) = CALLS.remove(&event1) {
                 call.send(());
+            }
 
-                match poll(ctx as *mut FutureState) {
-                    Poll::Ready(()) => {
-                        drop(Box::from_raw(ctx as *mut FutureState));
-                        1
-                    }
-                    Poll::Pending => 0,
+            let result = match poll(ctx as *mut FutureState) {
+                Poll::Ready(()) => {
+                    drop(Box::from_raw(ctx as *mut FutureState));
+                    1
                 }
-            } else {
-                1
+                Poll::Pending => 0,
             };
 
             if event0 == EVENT_CALL_DONE {
