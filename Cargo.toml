@@ -33,11 +33,11 @@ prettyplease = "0.2.20"
 syn = { version = "2.0.89", features = ["printing"] }
 futures = "0.3.31"
 
-wasmparser = { git = "https://github.com/dicej/wasm-tools", branch = "async" }
-wasm-encoder = { git = "https://github.com/dicej/wasm-tools", branch = "async" }
-wasm-metadata = { git = "https://github.com/dicej/wasm-tools", branch = "async" }
-wit-parser = { git = "https://github.com/dicej/wasm-tools", branch = "async" }
-wit-component = { git = "https://github.com/dicej/wasm-tools", branch = "async" }
+wasmparser = { git = "https://github.com/dicej/wasm-tools", branch = "async-v1.221.2" }
+wasm-encoder = { git = "https://github.com/dicej/wasm-tools", branch = "async-v1.221.2" }
+wasm-metadata = { git = "https://github.com/dicej/wasm-tools", branch = "async-v1.221.2" }
+wit-parser = { git = "https://github.com/dicej/wasm-tools", branch = "async-v1.221.2" }
+wit-component = { git = "https://github.com/dicej/wasm-tools", branch = "async-v1.221.2" }
 
 wit-bindgen-core = { path = 'crates/core', version = '0.36.0' }
 wit-bindgen-c = { path = 'crates/c', version = '0.36.0' }

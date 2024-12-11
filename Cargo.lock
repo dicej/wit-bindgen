@@ -1792,7 +1792,7 @@ dependencies = [
 [[package]]
 name = "wasm-encoder"
 version = "0.221.2"
-source = "git+https://github.com/dicej/wasm-tools?branch=async#c8c3f47e46f8e1ef1cc95114cdf714281ca0a92e"
+source = "git+https://github.com/dicej/wasm-tools?branch=async-v1.221.2#c019adc93d996839569169e7dfe53425b3629474"
 dependencies = [
  "leb128",
  "wasmparser 0.221.2",
@@ -1801,7 +1801,7 @@ dependencies = [
 [[package]]
 name = "wasm-metadata"
 version = "0.221.2"
-source = "git+https://github.com/dicej/wasm-tools?branch=async#c8c3f47e46f8e1ef1cc95114cdf714281ca0a92e"
+source = "git+https://github.com/dicej/wasm-tools?branch=async-v1.221.2#c019adc93d996839569169e7dfe53425b3629474"
 dependencies = [
  "anyhow",
  "indexmap",
@@ -1809,7 +1809,6 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "spdx",
- "url",
  "wasm-encoder 0.221.2",
  "wasmparser 0.221.2",
 ]
@@ -1841,7 +1840,7 @@ dependencies = [
 [[package]]
 name = "wasmparser"
 version = "0.221.2"
-source = "git+https://github.com/dicej/wasm-tools?branch=async#c8c3f47e46f8e1ef1cc95114cdf714281ca0a92e"
+source = "git+https://github.com/dicej/wasm-tools?branch=async-v1.221.2#c019adc93d996839569169e7dfe53425b3629474"
 dependencies = [
  "bitflags",
  "hashbrown 0.15.1",
@@ -2174,7 +2173,7 @@ dependencies = [
 [[package]]
 name = "wast"
 version = "221.0.2"
-source = "git+https://github.com/dicej/wasm-tools?branch=async#c8c3f47e46f8e1ef1cc95114cdf714281ca0a92e"
+source = "git+https://github.com/dicej/wasm-tools?branch=async-v1.221.2#c019adc93d996839569169e7dfe53425b3629474"
 dependencies = [
  "bumpalo",
  "leb128",
@@ -2195,7 +2194,7 @@ dependencies = [
 [[package]]
 name = "wat"
 version = "1.221.2"
-source = "git+https://github.com/dicej/wasm-tools?branch=async#c8c3f47e46f8e1ef1cc95114cdf714281ca0a92e"
+source = "git+https://github.com/dicej/wasm-tools?branch=async-v1.221.2#c019adc93d996839569169e7dfe53425b3629474"
 dependencies = [
  "wast 221.0.2",
 ]
@@ -2566,7 +2565,7 @@ dependencies = [
 [[package]]
 name = "wit-component"
 version = "0.221.2"
-source = "git+https://github.com/dicej/wasm-tools?branch=async#c8c3f47e46f8e1ef1cc95114cdf714281ca0a92e"
+source = "git+https://github.com/dicej/wasm-tools?branch=async-v1.221.2#c019adc93d996839569169e7dfe53425b3629474"
 dependencies = [
  "anyhow",
  "bitflags",
@@ -2603,7 +2602,7 @@ dependencies = [
 [[package]]
 name = "wit-parser"
 version = "0.221.2"
-source = "git+https://github.com/dicej/wasm-tools?branch=async#c8c3f47e46f8e1ef1cc95114cdf714281ca0a92e"
+source = "git+https://github.com/dicej/wasm-tools?branch=async-v1.221.2#c019adc93d996839569169e7dfe53425b3629474"
 dependencies = [
  "anyhow",
  "id-arena",
