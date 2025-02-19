@@ -63,6 +63,54 @@ impl std::fmt::Display for Enabled {
 }
 
 #[derive(Default, Debug, Clone)]
+pub enum AsyncConfig {
+    #[default]
+    None,
+    Some {
+        imports: Vec<String>,
+        exports: Vec<String>,
+    },
+    All,
+    Imports,
+}
+
+#[cfg(feature = "clap")]
+fn parse_async(s: &str) -> Result<AsyncConfig, String> {
+    Ok(match s {
+        "none" => AsyncConfig::None,
+        "all" => AsyncConfig::All,
+        "imports" => AsyncConfig::Imports,
+        _ => {
+            if let Some(values) = s.strip_prefix("some=") {
+                let mut imports = Vec::new();
+                let mut exports = Vec::new();
+                for value in values.split(',') {
+                    let error = || {
+                        Err(format!(
+                            "expected string of form `import:<name>` or `export:<name>`; got `{value}`"
+                        ))
+                    };
+                    if let Some((k, v)) = value.split_once(":") {
+                        match k {
+                            "import" => imports.push(v.into()),
+                            "export" => exports.push(v.into()),
+                            _ => return error(),
+                        }
+                    } else {
+                        return error();
+                    }
+                }
+                AsyncConfig::Some { imports, exports }
+            } else {
+                return Err(format!(
+                    "expected string of form `none`, `all`, or `some=<value>[,<value>...]`; got `{s}`"
+                ));
+            }
+        }
+    })
+}
+
+#[derive(Default, Debug, Clone)]
 #[cfg_attr(feature = "clap", derive(clap::Args))]
 pub struct Opts {
     /// Skip emitting component allocation helper functions
@@ -91,7 +139,7 @@ pub struct Opts {
     #[cfg_attr(feature = "clap", arg(long))]
     pub rename_world: Option<String>,
 
-    /// Add the specified suffix to the name of the custome section containing
+    /// Add the specified suffix to the name of the custom section containing
     /// the component type.
     #[cfg_attr(feature = "clap", arg(long))]
     pub type_section_suffix: Option<String>,
@@ -99,6 +147,18 @@ pub struct Opts {
     /// Configure the autodropping of borrows in exported functions.
     #[cfg_attr(feature = "clap", arg(long, default_value_t = Enabled::default()))]
     pub autodrop_borrows: Enabled,
+
+    /// Determines which functions to lift or lower `async`, if any.
+    ///
+    /// Accepted values are:
+    ///     - none: lift and lower all functions using the synchronous ABI
+    ///     - all: lift and lower all functions using the asynchronous ABI
+    ///     - imports: lift all exports sync and lower all imports async
+    ///     - some=<value>[,<value>...], where each <value> is of the form:
+    ///         - import:<name> or
+    ///         - export:<name>
+    #[cfg_attr(feature = "clap", arg(long = "async", value_parser = parse_async, default_value = "none"))]
+    pub async_: AsyncConfig,
 }
 
 #[cfg(feature = "clap")]
@@ -128,9 +188,9 @@ struct Return {
 struct CSig {
     name: String,
     sig: String,
+    lift_sig: Option<String>,
     params: Vec<(bool, String)>,
-    ret: Return,
-    retptrs: Vec<String>,
+    ret: CSigReturn,
 }
 
 #[derive(Debug)]
@@ -1687,6 +1747,18 @@ impl InterfaceGenerator<'_> {
     }
 
     fn import(&mut self, interface_name: Option<&WorldKey>, func: &Function) {
+        let async_ = match &self.gen.opts.async_ {
+            AsyncConfig::None => false,
+            AsyncConfig::All | AsyncConfig::Imports => true,
+            AsyncConfig::Some { imports, .. } => {
+                imports.contains(&if let Some((_, key)) = interface {
+                    format!("{}#{}", self.resolve.name_world_key(key), func.name)
+                } else {
+                    func.name.clone()
+                })
+            }
+        };
+
         self.docs(&func.docs, SourceType::HFns);
         let sig = self.resolve.wasm_signature(AbiVariant::GuestImport, func);
 
@@ -1707,29 +1779,41 @@ impl InterfaceGenerator<'_> {
         let name = self.c_func_name(interface_name, func);
         let import_name = self.gen.names.tmp(&format!("__wasm_import_{name}",));
         self.src.c_fns("extern ");
-        match sig.results.len() {
-            0 => self.src.c_fns("void"),
-            1 => self.src.c_fns(wasm_type(sig.results[0])),
-            _ => unimplemented!("multi-value return not supported"),
+        if async_ {
+            self.src.c_fns("int32_t");
+        } else {
+            match sig.results.len() {
+                0 => self.src.c_fns("void"),
+                1 => self.src.c_fns(wasm_type(sig.results[0])),
+                _ => unimplemented!("multi-value return not supported"),
+            }
         }
         self.src.c_fns(" ");
         self.src.c_fns(&import_name);
         self.src.c_fns("(");
-        for (i, param) in sig.params.iter().enumerate() {
-            if i > 0 {
-                self.src.c_fns(", ");
+        if async_ {
+            self.src.c_fns("uint8_t *, uint8_t *");
+        } else {
+            for (i, param) in sig.params.iter().enumerate() {
+                if i > 0 {
+                    self.src.c_fns(", ");
+                }
+                self.src.c_fns(wasm_type(*param));
             }
-            self.src.c_fns(wasm_type(*param));
-        }
-        if sig.params.len() == 0 {
-            self.src.c_fns("void");
+            if sig.params.len() == 0 {
+                self.src.c_fns("void");
+            }
         }
         self.src.c_fns(");\n");
 
         // Print the public facing signature into the header, and since that's
         // what we are defining also print it into the C file.
-        self.src.h_fns("extern ");
-        let c_sig = self.print_sig(interface_name, func, !self.gen.opts.no_sig_flattening);
+        let c_sig = self.print_sig(
+            interface_name,
+            func,
+            !self.gen.opts.no_sig_flattening,
+            async_,
+        );
         self.src.c_adapters("\n");
         self.src.c_adapters(&c_sig.sig);
         self.src.c_adapters(" {\n");
@@ -1778,11 +1862,12 @@ impl InterfaceGenerator<'_> {
             LiftLower::LowerArgsLiftResults,
             func,
             &mut f,
-            false,
+            async_,
         );
 
         let FunctionBindgen {
             src,
+            lift_src,
             import_return_pointer_area_size,
             import_return_pointer_area_align,
             ..
@@ -1799,9 +1884,33 @@ impl InterfaceGenerator<'_> {
 
         self.src.c_adapters(&String::from(src));
         self.src.c_adapters("}\n");
+
+        if let Some(lift_sig) = c_sig.lift_sig.as_deref() {
+            self.src.c_adapters("\n");
+            self.src.c_adapters(lift_sig);
+            self.src.c_adapters(" {\n");
+            self.src.c_adapters(&String::from(lift_src));
+            self.src.c_adapters("}\n");
+        }
     }
 
     fn export(&mut self, func: &Function, interface_name: Option<&WorldKey>) {
+        let async_ = match &self.gen.opts.async_ {
+            AsyncConfig::None | AsyncConfig::Imports => false,
+            AsyncConfig::All => true,
+            AsyncConfig::Some { exports, .. } => {
+                exports.contains(&if let Some((_, key)) = interface {
+                    format!("{}#{}", self.resolve.name_world_key(key), func.name)
+                } else {
+                    func.name.clone()
+                })
+            }
+        };
+
+        if async_ {
+            todo!("async exports not yet supported");
+        }
+
         let sig = self.resolve.wasm_signature(AbiVariant::GuestExport, func);
 
         self.src.c_fns("\n");
@@ -1811,7 +1920,12 @@ impl InterfaceGenerator<'_> {
 
         // Print the actual header for this function into the header file, and
         // it's what we'll be calling.
-        let h_sig = self.print_sig(interface_name, func, !self.gen.opts.no_sig_flattening);
+        let h_sig = self.print_sig(
+            interface_name,
+            func,
+            !self.gen.opts.no_sig_flattening,
+            false,
+        );
 
         // Generate, in the C source file, the raw wasm signature that has the
         // canonical ABI.
@@ -1894,25 +2008,85 @@ impl InterfaceGenerator<'_> {
         interface_name: Option<&WorldKey>,
         func: &Function,
         sig_flattening: bool,
+        async_: bool,
     ) -> CSig {
         let name = self.c_func_name(interface_name, func);
         self.gen.names.insert(&name).expect("duplicate symbols");
 
         let start = self.src.h_fns.len();
-        let mut result_rets = false;
-        let mut result_rets_has_ok_type = false;
 
-        let ret = self.classify_ret(func, sig_flattening);
-        match &ret.scalar {
-            None | Some(Scalar::Void) => self.src.h_fns("void"),
-            Some(Scalar::OptionBool(_id)) => self.src.h_fns("bool"),
-            Some(Scalar::ResultBool(ok, _err)) => {
-                result_rets = true;
-                result_rets_has_ok_type = ok.is_some();
-                self.src.h_fns("bool");
+        let print_ret = |me| {
+            let mut result_rets = false;
+            let mut result_rets_has_ok_type = false;
+            let ret = me.classify_ret(func, sig_flattening);
+            match &ret.scalar {
+                None | Some(Scalar::Void) => me.src.h_fns("void"),
+                Some(Scalar::OptionBool(_id)) => me.src.h_fns("bool"),
+                Some(Scalar::ResultBool(ok, _err)) => {
+                    result_rets = true;
+                    result_rets_has_ok_type = ok.is_some();
+                    me.src.h_fns("bool");
+                }
+                Some(Scalar::Type(ty)) => me.print_ty(SourceType::HFns, ty),
             }
-            Some(Scalar::Type(ty)) => self.print_ty(SourceType::HFns, ty),
-        }
+            (ret, result_rets, result_rets_has_ok_type)
+        };
+
+        let print_retptrs = |me, (ret, result_rets, result_rets_has_ok_type), have_params| {
+            let mut retptrs = Vec::new();
+            let single_ret = ret.retptrs.len() == 1;
+            for (i, ty) in ret.retptrs.iter().enumerate() {
+                if i > 0 || have_params {
+                    self.src.h_fns(", ");
+                }
+                self.print_ty(SourceType::HFns, ty);
+                self.src.h_fns(" *");
+                let name: String = if result_rets {
+                    assert!(i <= 1);
+                    if i == 0 && result_rets_has_ok_type {
+                        "ret".into()
+                    } else {
+                        "err".into()
+                    }
+                } else if single_ret {
+                    "ret".into()
+                } else {
+                    format!("ret{}", i)
+                };
+                self.src.h_fns(&name);
+                retptrs.push(name);
+            }
+            if !have_params && ret.retptrs.len() == 0 {
+                self.src.h_fns("void");
+            }
+            retptrs
+        };
+
+        let (ret, lift) = if async_ {
+            let lift_name = format!("{name}_lift");
+            self.gen
+                .names
+                .insert(&lift_name)
+                .expect("duplicate symbols");
+
+            let ret = print_ret(self);
+            self.src.h_fns(" ");
+            self.src.h_fns(&lift_name);
+            self.src.h_fns("(uint8_t *");
+            let retptrs = print_retptrs(self, &ret, true);
+            self.src.h_fns(")");
+
+            let lift_sig = self.src.h_fns[start..].to_string();
+            self.src.h_fns(";\n");
+
+            self.gen.need_async_result_type = true;
+            self.src.h_fns("async_result_t");
+
+            (ret, Some((retptrs, lift_sig, self.src.h_fns.len())))
+        } else {
+            (print_ret(self), None)
+        };
+
         self.src.h_fns(" ");
         self.src.h_fns(&name);
         self.src.h_fns("(");
@@ -1953,42 +2127,27 @@ impl InterfaceGenerator<'_> {
             self.src.h_fns(&print_name);
             params.push((optional_type.is_none() && pointer, to_c_ident(name)));
         }
-        let mut retptrs = Vec::new();
-        let single_ret = ret.retptrs.len() == 1;
-        for (i, ty) in ret.retptrs.iter().enumerate() {
-            if i > 0 || func.params.len() > 0 {
-                self.src.h_fns(", ");
-            }
-            self.print_ty(SourceType::HFns, ty);
-            self.src.h_fns(" *");
-            let name: String = if result_rets {
-                assert!(i <= 1);
-                if i == 0 && result_rets_has_ok_type {
-                    "ret".into()
-                } else {
-                    "err".into()
-                }
-            } else if single_ret {
-                "ret".into()
-            } else {
-                format!("ret{}", i)
-            };
-            self.src.h_fns(&name);
-            retptrs.push(name);
-        }
-        if func.params.len() == 0 && ret.retptrs.len() == 0 {
-            self.src.h_fns("void");
-        }
+
+        let retptrs = if async_ {
+            Vec::new()
+        } else {
+            print_retptrs(self, &ret, !func.params.is_empty())
+        };
         self.src.h_fns(")");
 
-        let sig = self.src.h_fns[start..].to_string();
+        let (retptrs, lift_sig, sig) = if let Some((retptrs, lift_sig, start)) = lift {
+            (retptrs, Some(lift_sig), self.src.h_fns[start..].to_string())
+        } else {
+            (retptrs, None, self.src.h_fns[start..].to_string())
+        };
         self.src.h_fns(";\n");
 
         CSig {
             sig,
+            lift_sig,
             name,
             params,
-            ret,
+            ret: ret.0,
             retptrs,
         }
     }
