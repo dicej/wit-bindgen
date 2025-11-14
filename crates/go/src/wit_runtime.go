@@ -1,0 +1,83 @@
+package wit_runtime
+
+import (
+	"fmt"
+	"runtime"
+	"unsafe"
+)
+
+func Allocate(pinner *runtime.Pinner, size, align uintptr) unsafe.Pointer {
+	pointer := allocateRaw(size, align)
+	pinner.Pin(pointer)
+	return pointer
+}
+
+func ceiling(n, d uintptr) uintptr {
+	var hasRemainder uintptr
+	if n%d == 0 {
+		hasRemainder = 0
+	} else {
+		hasRemainder = 1
+	}
+	return n/d + hasRemainder
+}
+
+func allocateRaw(size, align uintptr) unsafe.Pointer {
+	if size == 0 {
+		return unsafe.Pointer(uintptr(0))
+	}
+
+	switch align {
+	case 1:
+		return unsafe.Pointer(unsafe.SliceData(make([]uint8, size)))
+	case 2:
+		return unsafe.Pointer(unsafe.SliceData(make([]uint16, ceiling(size, align))))
+	case 4:
+		return unsafe.Pointer(unsafe.SliceData(make([]uint32, ceiling(size, align))))
+	case 8:
+		return unsafe.Pointer(unsafe.SliceData(make([]uint64, ceiling(size, align))))
+	default:
+		panic(fmt.Sprintf("unsupported alignment: %v", align))
+	}
+}
+
+// NB: `cabi_realloc` may be called before the Go runtime has been initialized,
+// in which case we need to use `runtime.sbrk` to do allocations.  The following
+// is an abbreviation of [Till's
+// efforts](https://github.com/bytecodealliance/go-modules/pull/367).
+
+//go:linkname sbrk runtime.sbrk
+func sbrk(n uintptr) unsafe.Pointer
+
+var useGCAllocations = false
+
+func init() {
+	useGCAllocations = true
+}
+
+func offset(ptr, align uintptr) uintptr {
+	newptr := (ptr + align - 1) &^ (align - 1)
+	return newptr - ptr
+}
+
+var pinner = runtime.Pinner{}
+
+func Unpin() {
+	pinner.Unpin()
+}
+
+//go:wasmexport cabi_realloc
+func cabiRealloc(oldPointer unsafe.Pointer, oldSize, align, newSize uintptr) unsafe.Pointer {
+	if oldPointer != nil || oldSize != 0 {
+		panic("todo")
+	}
+
+	if useGCAllocations {
+		return Allocate(&pinner, newSize, align)
+	} else {
+		alignedSize := newSize + offset(newSize, align)
+		unaligned := sbrk(alignedSize)
+		off := offset(uintptr(unaligned), align)
+		return unsafe.Add(unaligned, off)
+	}
+}
