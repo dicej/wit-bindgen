@@ -42,12 +42,15 @@ func (f *FutureReader[T]) Read() T {
 	code, _ := wit_async.FutureOrStreamWait(f.vtable.Read(handle, buffer), handle)
 
 	switch code {
-	case wit_async.RETURN_CODE_COMPLETED, wit_async.RETURN_CODE_DROPPED:
+	case wit_async.RETURN_CODE_COMPLETED:
 		if f.vtable.Lift == nil {
 			return unsafe.Slice((*T)(buffer), 1)[0]
 		} else {
 			return f.vtable.Lift(buffer)
 		}
+
+	case wit_async.RETURN_CODE_DROPPED:
+		panic("unreachable")
 
 	default:
 		panic("todo: handle cancellation")

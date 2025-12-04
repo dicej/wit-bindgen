@@ -12,30 +12,24 @@ func Allocate(pinner *runtime.Pinner, size, align uintptr) unsafe.Pointer {
 	return pointer
 }
 
-func ceiling(n, d uintptr) uintptr {
-	var hasRemainder uintptr
-	if n%d == 0 {
-		hasRemainder = 0
-	} else {
-		hasRemainder = 1
-	}
-	return n/d + hasRemainder
-}
-
 func allocateRaw(size, align uintptr) unsafe.Pointer {
 	if size == 0 {
 		return unsafe.Pointer(uintptr(0))
+	}
+
+	if size%align != 0 {
+		panic(fmt.Sprintf("size %v is not compatible with alignment %v", size, align))
 	}
 
 	switch align {
 	case 1:
 		return unsafe.Pointer(unsafe.SliceData(make([]uint8, size)))
 	case 2:
-		return unsafe.Pointer(unsafe.SliceData(make([]uint16, ceiling(size, align))))
+		return unsafe.Pointer(unsafe.SliceData(make([]uint16, size/align)))
 	case 4:
-		return unsafe.Pointer(unsafe.SliceData(make([]uint32, ceiling(size, align))))
+		return unsafe.Pointer(unsafe.SliceData(make([]uint32, size/align)))
 	case 8:
-		return unsafe.Pointer(unsafe.SliceData(make([]uint64, ceiling(size, align))))
+		return unsafe.Pointer(unsafe.SliceData(make([]uint64, size/align)))
 	default:
 		panic(fmt.Sprintf("unsupported alignment: %v", align))
 	}
