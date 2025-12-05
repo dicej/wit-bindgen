@@ -28,8 +28,8 @@ impl LanguageMethods for Go {
         config.error_context
     }
 
-    fn codegen_test_variants(&self) -> &[(&str, &[&str])] {
-        &[("normal", &[])]
+    fn default_bindgen_args_for_codegen(&self) -> &[&str] {
+        &["--generate-stubs"]
     }
 
     fn prepare(&self, runner: &mut Runner<'_>) -> Result<()> {
@@ -174,8 +174,17 @@ world command {
     }
 
     fn verify(&self, runner: &Runner<'_>, verify: &Verify<'_>) -> Result<()> {
-        _ = (runner, verify);
-        todo!()
+        runner.run_command(
+            Command::new("go")
+                .current_dir(&verify.bindings_dir)
+                .env("GOOS", "wasip1")
+                .env("GOARCH", "wasm")
+                .arg("build")
+                .arg("-o")
+                .arg(verify.artifacts_dir.join("tmp.wasm"))
+                .arg("-buildmode=c-shared")
+                .arg("-ldflags=-checklinkname=0"),
+        )
     }
 }
 

@@ -2,6 +2,7 @@ use anyhow::Result;
 use heck::{ToLowerCamelCase as _, ToSnakeCase as _, ToUpperCamelCase as _};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map};
 use std::fmt::Write as _;
+use std::iter;
 use std::mem;
 use wit_bindgen_core::abi::{
     self, AbiVariant, Bindgen, Bitcast, FlatTypes, Instruction, LiftLower, WasmType,
@@ -31,6 +32,11 @@ const PINNER: &str = "pinner";
 pub struct Opts {
     #[cfg_attr(feature = "clap", clap(flatten))]
     pub async_: AsyncFilterSet,
+
+    /// If true, generate stub functions for any exported functions and/or
+    /// resources.
+    #[cfg_attr(feature = "clap", clap(long))]
+    pub generate_stubs: bool,
 }
 
 impl Opts {
@@ -88,7 +94,7 @@ impl From<InterfaceGenerator<'_>> for InterfaceData {
             code: generator.src,
             imports: generator.imports,
             need_unsafe: generator.need_unsafe,
-            need_runtime: false,
+            need_runtime: generator.need_runtime,
             need_math: false,
         }
     }
@@ -110,12 +116,13 @@ struct Go {
     need_future: bool,
     need_stream: bool,
     need_async: bool,
+    need_unsafe: bool,
     interface_names: HashMap<InterfaceId, WorldKey>,
     interfaces: BTreeMap<String, InterfaceData>,
     export_interfaces: BTreeMap<String, InterfaceData>,
     types: HashSet<TypeId>,
     resources: HashMap<TypeId, Direction>,
-    futures_and_streams: HashMap<TypeId, Option<WorldKey>>,
+    futures_and_streams: HashMap<(TypeId, bool), Option<WorldKey>>,
 }
 
 impl Go {
@@ -125,18 +132,16 @@ impl Go {
         owner: Option<&WorldKey>,
         id: TypeId,
         local: Option<&WorldKey>,
+        in_import: bool,
         imports: &mut BTreeSet<String>,
     ) -> String {
-        let ty = &resolve.types[id];
+        let exported = self.has_exported_resource(resolve, Type::Id(id));
 
-        let exported_resource = matches!(ty.kind, TypeDefKind::Resource)
-            && matches!(self.resources.get(&id).unwrap(), Direction::Export);
-
-        if !exported_resource && local == owner {
+        if local == owner && (exported ^ in_import) {
             String::new()
         } else {
             let package = interface_name(resolve, owner);
-            let package = if exported_resource {
+            let package = if exported {
                 format!("export_{package}")
             } else {
                 package
@@ -152,6 +157,7 @@ impl Go {
         resolve: &Resolve,
         id: TypeId,
         local: Option<&WorldKey>,
+        in_import: bool,
         imports: &mut BTreeSet<String>,
     ) -> String {
         let ty = &resolve.types[id];
@@ -166,7 +172,7 @@ impl Go {
             TypeOwner::None => unreachable!(),
         };
 
-        self.package_for_owner(resolve, owner.as_ref(), id, local, imports)
+        self.package_for_owner(resolve, owner.as_ref(), id, local, in_import, imports)
     }
 
     fn type_name(
@@ -174,6 +180,7 @@ impl Go {
         resolve: &Resolve,
         ty: Type,
         local: Option<&WorldKey>,
+        in_import: bool,
         imports: &mut BTreeSet<String>,
     ) -> String {
         match ty {
@@ -198,36 +205,37 @@ impl Go {
                     | TypeDefKind::Variant(_)
                     | TypeDefKind::Enum(_)
                     | TypeDefKind::Resource => {
-                        let package = self.package(resolve, id, local, imports);
+                        let package = self.package(resolve, id, local, in_import, imports);
                         let name = ty.name.as_ref().unwrap().to_upper_camel_case();
 
                         format!("{package}{name}")
                     }
                     TypeDefKind::Handle(Handle::Own(ty) | Handle::Borrow(ty)) => {
-                        let name = self.type_name(resolve, Type::Id(*ty), local, imports);
+                        let name =
+                            self.type_name(resolve, Type::Id(*ty), local, in_import, imports);
                         format!("*{name}")
                     }
                     TypeDefKind::Option(ty) => {
                         imports.insert("wit_types".into());
-                        let ty = self.type_name(resolve, *ty, local, imports);
+                        let ty = self.type_name(resolve, *ty, local, in_import, imports);
                         format!("wit_types.Option[{ty}]")
                     }
                     TypeDefKind::List(ty) => {
-                        let ty = self.type_name(resolve, *ty, local, imports);
+                        let ty = self.type_name(resolve, *ty, local, in_import, imports);
                         format!("[]{ty}")
                     }
                     TypeDefKind::Result(result) => {
                         imports.insert("wit_types".into());
                         let ok_type = result
                             .ok
-                            .map(|ty| self.type_name(resolve, ty, local, imports))
+                            .map(|ty| self.type_name(resolve, ty, local, in_import, imports))
                             .unwrap_or_else(|| {
                                 self.need_unit = true;
                                 "wit_types.Unit".into()
                             });
                         let err_type = result
                             .err
-                            .map(|ty| self.type_name(resolve, ty, local, imports))
+                            .map(|ty| self.type_name(resolve, ty, local, in_import, imports))
                             .unwrap_or_else(|| {
                                 self.need_unit = true;
                                 "wit_types.Unit".into()
@@ -241,7 +249,7 @@ impl Go {
                         let types = tuple
                             .types
                             .iter()
-                            .map(|ty| self.type_name(resolve, *ty, local, imports))
+                            .map(|ty| self.type_name(resolve, *ty, local, in_import, imports))
                             .collect::<Vec<_>>()
                             .join(", ");
                         format!("wit_types.Tuple{count}[{types}]")
@@ -250,7 +258,7 @@ impl Go {
                         self.need_future = true;
                         imports.insert("wit_types".into());
                         let ty = ty
-                            .map(|ty| self.type_name(resolve, ty, local, imports))
+                            .map(|ty| self.type_name(resolve, ty, local, in_import, imports))
                             .unwrap_or_else(|| {
                                 self.need_unit = true;
                                 "wit_types.Unit".into()
@@ -261,14 +269,16 @@ impl Go {
                         self.need_stream = true;
                         imports.insert("wit_types".into());
                         let ty = ty
-                            .map(|ty| self.type_name(resolve, ty, local, imports))
+                            .map(|ty| self.type_name(resolve, ty, local, in_import, imports))
                             .unwrap_or_else(|| {
                                 self.need_unit = true;
                                 "wit_types.Unit".into()
                             });
                         format!("*wit_types.StreamReader[{ty}]")
                     }
-                    TypeDefKind::Type(ty) => self.type_name(resolve, *ty, local, imports),
+                    TypeDefKind::Type(ty) => {
+                        self.type_name(resolve, *ty, local, in_import, imports)
+                    }
                     _ => todo!("{:?}", ty.kind),
                 }
             }
@@ -311,7 +321,7 @@ impl Go {
 
         let (payload, snake) = if let Some(ty) = payload_ty {
             (
-                self.type_name(resolve, ty, interface, &mut data.imports),
+                self.type_name(resolve, ty, interface, in_import, &mut data.imports),
                 self.mangle_name(resolve, ty, interface),
             )
         } else {
@@ -345,6 +355,8 @@ impl Go {
                 "nil".to_string(),
             ),
             Some(ty) => {
+                data.need_runtime = true;
+
                 let mut generator = FunctionGenerator::new(
                     self,
                     None,
@@ -353,7 +365,7 @@ impl Go {
                     "INVALID",
                     Vec::new(),
                     false,
-                    false,
+                    in_import,
                 );
 
                 let lift_result =
@@ -631,22 +643,25 @@ impl WorldGenerator for Go {
                     });
 
             for (is_resource, types) in [(true, resources), (false, others)] {
-                let mut generator = InterfaceGenerator::new(self, resolve, Some((id, name)), false);
-                for (name, ty) in types {
-                    if is_resource || !generator.generator.types.contains(ty) {
+                for (type_name, ty) in types {
+                    let exported =
+                        is_resource || self.has_exported_resource(resolve, Type::Id(*ty));
+                    let mut generator =
+                        InterfaceGenerator::new(self, resolve, Some((id, name)), false);
+                    if exported || !generator.generator.types.contains(ty) {
                         generator.generator.types.insert(*ty);
-                        generator.define_type(name, *ty);
+                        generator.define_type(type_name, *ty);
                     }
+                    let data = generator.into();
+                    if exported {
+                        &mut self.export_interfaces
+                    } else {
+                        &mut self.interfaces
+                    }
+                    .entry(interface_name(resolve, Some(name)))
+                    .or_default()
+                    .extend(data);
                 }
-                let data = generator.into();
-                if is_resource {
-                    &mut self.export_interfaces
-                } else {
-                    &mut self.interfaces
-                }
-                .entry(interface_name(resolve, Some(name)))
-                .or_default()
-                .extend(data);
             }
         }
 
@@ -704,6 +719,7 @@ impl WorldGenerator for Go {
             .iter()
             .map(|v| format!(r#""wit_component/{v}""#))
             .chain(self.need_math.then(|| r#""math""#.into()))
+            .chain(self.need_unsafe.then(|| r#""unsafe""#.into()))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -713,13 +729,12 @@ impl WorldGenerator for Go {
                 r#"package main
 
 import (
-        "unsafe"
         "runtime"
         {imports}
 )
 
 var staticPinner = runtime.Pinner{{}}
-var {EXPORT_RETURN_AREA} unsafe.Pointer = wit_runtime.Allocate(&staticPinner, {size}, {align})
+var {EXPORT_RETURN_AREA} = uintptr(wit_runtime.Allocate(&staticPinner, {size}, {align}))
 var {SYNC_EXPORT_PINNER} = runtime.Pinner{{}}
 
 {src}
@@ -839,90 +854,31 @@ impl Go {
         let sig = resolve.wasm_signature(variant, func);
         let import_name = &func.name;
         let name = func.name.to_snake_case().replace('.', "_");
-        let (camel, has_self) = match &func.kind {
-            FunctionKind::Freestanding | FunctionKind::AsyncFreestanding => {
-                (func.item_name().to_upper_camel_case(), false)
-            }
-            FunctionKind::Constructor(ty) => {
-                let ty = resolve.types[*ty]
-                    .name
-                    .as_ref()
-                    .unwrap()
-                    .to_upper_camel_case();
-                (format!("Make{ty}"), false)
-            }
-            FunctionKind::Method(ty) | FunctionKind::AsyncMethod(ty) => {
-                let ty = resolve.types[*ty]
-                    .name
-                    .as_ref()
-                    .unwrap()
-                    .to_upper_camel_case();
-                let camel = func.item_name().to_upper_camel_case();
-                (format!("(self *{ty}) {camel}"), true)
-            }
-            FunctionKind::Static(ty) | FunctionKind::AsyncStatic(ty) => {
-                let ty = resolve.types[*ty]
-                    .name
-                    .as_ref()
-                    .unwrap()
-                    .to_upper_camel_case();
-                let camel = func.item_name().to_upper_camel_case();
-                (format!("{ty}{camel}"), false)
-            }
-        };
+        let (camel, has_self) = func_declaration(resolve, func);
 
         let module = match interface {
             Some(name) => resolve.name_world_key(name),
             None => "$root".to_string(),
         };
 
-        let mut need_unsafe = false;
-
         let params = sig
             .params
             .iter()
             .enumerate()
-            .map(|(i, param)| format!("arg{i} {}", wasm_type(*param, &mut need_unsafe)))
+            .map(|(i, param)| format!("arg{i} {}", wasm_type(*param)))
             .collect::<Vec<_>>()
             .join(", ");
 
         let results = match &sig.results[..] {
             [] => "",
-            [result] => wasm_type(*result, &mut need_unsafe),
+            [result] => wasm_type(*result),
             _ => unreachable!(),
         };
 
         let mut imports = BTreeSet::new();
-
-        let go_params = func
-            .params
-            .iter()
-            .skip(if has_self { 1 } else { 0 })
-            .map(|(name, ty)| {
-                let name = name.to_lower_camel_case();
-                let ty = self.type_name(resolve, *ty, interface, &mut imports);
-                format!("{name} {ty}")
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let go_results = if let Some(ty) = &func.result {
-            if let Type::Id(id) = ty
-                && let TypeDefKind::Tuple(tuple) = &resolve.types[*id].kind
-            {
-                let types = tuple
-                    .types
-                    .iter()
-                    .map(|ty| self.type_name(resolve, *ty, interface, &mut imports))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("({types})")
-            } else {
-                self.type_name(resolve, *ty, interface, &mut imports)
-            }
-        } else {
-            String::new()
-        };
+        let go_params =
+            self.func_params(resolve, func, interface, true, &mut imports, has_self, "");
+        let go_results = self.func_results(resolve, func, interface, true, &mut imports);
 
         let raw_name = format!("wasm_import_{name}");
 
@@ -948,7 +904,6 @@ impl Go {
             true,
         );
         generator.imports = imports;
-        generator.need_unsafe = need_unsafe;
 
         let code = if async_ {
             generator.generator.need_async = true;
@@ -974,7 +929,7 @@ impl Go {
                     abi::lower_to_memory(
                         resolve,
                         &mut generator,
-                        format!("unsafe.Add({params_pointer}, {offset})"),
+                        format!("unsafe.Add(unsafe.Pointer({params_pointer}), {offset})"),
                         name.clone(),
                         ty,
                     );
@@ -984,7 +939,7 @@ impl Go {
                 generator.need_pinner = true;
                 (
                     format!(
-                        "{params_pointer} := wit_runtime.Allocate(pinner, {size}, {align})\n{code}"
+                        "{params_pointer} := wit_runtime.Allocate({PINNER}, {size}, {align})\n{code}"
                     ),
                     vec![params_pointer],
                 )
@@ -1037,14 +992,17 @@ wit_async.SubtaskWait(uint32({raw_name}({wasm_params})))
             mem::take(&mut generator.src)
         };
 
-        let return_area =
-            |generator: &mut FunctionGenerator<'_>, size: ArchitectureSize, align: Alignment| {
-                generator.imports.insert("wit_runtime".into());
-                generator.need_pinner = true;
-                let size = size.format(POINTER_SIZE_EXPRESSION);
-                let align = align.format(POINTER_SIZE_EXPRESSION);
-                format!("{IMPORT_RETURN_AREA} := wit_runtime.Allocate({PINNER}, {size}, {align})")
-            };
+        let return_area = |generator: &mut FunctionGenerator<'_>,
+                           size: ArchitectureSize,
+                           align: Alignment| {
+            generator.imports.insert("wit_runtime".into());
+            generator.need_pinner = true;
+            let size = size.format(POINTER_SIZE_EXPRESSION);
+            let align = align.format(POINTER_SIZE_EXPRESSION);
+            format!(
+                "{IMPORT_RETURN_AREA} := uintptr(wit_runtime.Allocate({PINNER}, {size}, {align}))"
+            )
+        };
 
         let return_area = if async_ && func.result.is_some() {
             let abi = generator.generator.sizes.record(func.result.as_ref());
@@ -1109,13 +1067,13 @@ func {camel}({go_params}) {go_results} {{
             .params
             .iter()
             .enumerate()
-            .map(|(i, param)| format!("arg{i} {}", wasm_type(*param, &mut false)))
+            .map(|(i, param)| format!("arg{i} {}", wasm_type(*param)))
             .collect::<Vec<_>>()
             .join(", ");
 
         let results = match &sig.results[..] {
             [] => "",
-            [result] => wasm_type(*result, &mut false),
+            [result] => wasm_type(*result),
             _ => unreachable!(),
         };
 
@@ -1143,7 +1101,9 @@ func {camel}({go_params}) {go_results} {{
         );
         let code = generator.src;
         let imports = generator.imports;
+        let need_unsafe = generator.need_unsafe;
         self.need_math |= generator.need_math;
+        self.need_unsafe |= need_unsafe;
         self.imports.extend(imports);
 
         let (pinner, other, start, end) = if async_ {
@@ -1172,7 +1132,7 @@ func {camel}({go_params}) {go_results} {{
                 .into_iter()
                 .enumerate()
                 .map(|(i, ty)| {
-                    let ty = wasm_type(ty, &mut false);
+                    let ty = wasm_type(ty);
                     format!("arg{i} {ty}")
                 })
                 .collect::<Vec<_>>()
@@ -1218,6 +1178,30 @@ func wasm_export_post_return_{name}(result {results}) {{
             (String::new(), String::new(), "", "")
         };
 
+        if self.opts.generate_stubs {
+            let (camel, has_self) = func_declaration(resolve, func);
+
+            let mut imports = BTreeSet::new();
+            let params =
+                self.func_params(resolve, func, interface, false, &mut imports, has_self, "_");
+            let results = self.func_results(resolve, func, interface, false, &mut imports);
+
+            self.export_interfaces
+                .entry(interface_name(resolve, interface))
+                .or_default()
+                .extend(InterfaceData {
+                    code: format!(
+                        r#"
+func {camel}({params}) {results} {{
+        panic("not implemented")
+}}
+"#
+                    ),
+                    imports,
+                    ..InterfaceData::default()
+                });
+        }
+
         format!(
             "
 //go:wasmexport {prefix}{export_name}
@@ -1229,6 +1213,56 @@ func wasm_export_{name}({params}) {results} {{
 }}{other}
 "
         )
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    fn func_params(
+        &mut self,
+        resolve: &Resolve,
+        func: &Function,
+        interface: Option<&WorldKey>,
+        in_import: bool,
+        imports: &mut BTreeSet<String>,
+        has_self: bool,
+        prefix: &str,
+    ) -> String {
+        func.params
+            .iter()
+            .skip(if has_self { 1 } else { 0 })
+            .map(|(name, ty)| {
+                let name = name.to_lower_camel_case();
+                let ty = self.type_name(resolve, *ty, interface, in_import, imports);
+                format!("{prefix}{name} {ty}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn func_results(
+        &mut self,
+        resolve: &Resolve,
+        func: &Function,
+        interface: Option<&WorldKey>,
+        in_import: bool,
+        imports: &mut BTreeSet<String>,
+    ) -> String {
+        if let Some(ty) = &func.result {
+            if let Type::Id(id) = ty
+                && let TypeDefKind::Tuple(tuple) = &resolve.types[*id].kind
+            {
+                let types = tuple
+                    .types
+                    .iter()
+                    .map(|ty| self.type_name(resolve, *ty, interface, in_import, imports))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({types})")
+            } else {
+                self.type_name(resolve, *ty, interface, in_import, imports)
+            }
+        } else {
+            String::new()
+        }
     }
 
     fn visit_futures_and_streams(
@@ -1245,29 +1279,29 @@ func wasm_export_{name}({params}) {results} {{
         {
             self.need_async = true;
 
-            if let hash_map::Entry::Vacant(e) = self.futures_and_streams.entry(ty) {
-                e.insert(interface.cloned());
+            let payload_type = match &resolve.types[ty].kind {
+                TypeDefKind::Future(ty) => {
+                    self.need_future = true;
+                    ty
+                }
+                TypeDefKind::Stream(ty) => {
+                    self.need_stream = true;
+                    ty
+                }
+                _ => unreachable!(),
+            };
 
-                let payload_type = match &resolve.types[ty].kind {
-                    TypeDefKind::Future(ty) => {
-                        self.need_future = true;
-                        ty
-                    }
-                    TypeDefKind::Stream(ty) => {
-                        self.need_stream = true;
-                        ty
-                    }
-                    _ => unreachable!(),
-                };
+            let exported = payload_type
+                .map(|ty| self.has_exported_resource(resolve, ty))
+                .unwrap_or(false);
+
+            if let hash_map::Entry::Vacant(e) = self.futures_and_streams.entry((ty, exported)) {
+                e.insert(interface.cloned());
 
                 let data =
                     self.future_or_stream(resolve, ty, index, in_import, interface, &func.name);
 
-                if in_import
-                    || !payload_type
-                        .map(|ty| has_resource(resolve, ty))
-                        .unwrap_or(false)
-                {
+                if in_import || !exported {
                     &mut self.interfaces
                 } else {
                     &mut self.export_interfaces
@@ -1277,6 +1311,19 @@ func wasm_export_{name}({params}) {results} {{
                 .extend(data);
             }
         }
+    }
+
+    fn has_exported_resource(&self, resolve: &Resolve, ty: Type) -> bool {
+        any(resolve, ty, &|ty| {
+            if let Type::Id(id) = ty
+                && let TypeDefKind::Resource = &resolve.types[id].kind
+                && let Direction::Export = self.resources.get(&id).unwrap()
+            {
+                true
+            } else {
+                false
+            }
+        })
     }
 }
 
@@ -1341,8 +1388,13 @@ impl<'a> FunctionGenerator<'a> {
     }
 
     fn type_name(&mut self, resolve: &Resolve, ty: Type) -> String {
-        self.generator
-            .type_name(resolve, ty, self.interface_for_types, &mut self.imports)
+        self.generator.type_name(
+            resolve,
+            ty,
+            self.interface_for_types,
+            self.in_import,
+            &mut self.imports,
+        )
     }
 
     fn package_for_owner(
@@ -1356,6 +1408,7 @@ impl<'a> FunctionGenerator<'a> {
             owner,
             ty,
             self.interface_for_types,
+            self.in_import,
             &mut self.imports,
         )
     }
@@ -1421,16 +1474,24 @@ impl Bindgen for FunctionGenerator<'_> {
         results: &mut Vec<String>,
     ) {
         let store = |me: &mut Self, src, pointer, offset: &ArchitectureSize, ty| {
+            me.need_unsafe = true;
             let offset = offset.format(POINTER_SIZE_EXPRESSION);
-            uwriteln!(me.src, "*(*{ty})(unsafe.Add({pointer}, {offset})) = {src}");
+            uwriteln!(
+                me.src,
+                "*(*{ty})(unsafe.Add(unsafe.Pointer({pointer}), {offset})) = {src}"
+            );
         };
-        let load = |results: &mut Vec<String>,
+        let load = |me: &mut Self,
+                    results: &mut Vec<String>,
                     pointer,
                     offset: &ArchitectureSize,
                     ty,
                     cast: &dyn Fn(String) -> String| {
+            me.need_unsafe = true;
             let offset = offset.format(POINTER_SIZE_EXPRESSION);
-            results.push(cast(format!("*(*{ty})(unsafe.Add({pointer}, {offset}))")));
+            results.push(cast(format!(
+                "*(*{ty})(unsafe.Add(unsafe.Pointer({pointer}), {offset}))"
+            )));
         };
 
         match instruction {
@@ -1443,9 +1504,9 @@ impl Bindgen for FunctionGenerator<'_> {
                 uwriteln!(
                     self.src,
                     "{utf8} := unsafe.Pointer(unsafe.StringData({string}))\n\
-                     pinner.Pin({utf8})"
+                     {PINNER}.Pin({utf8})"
                 );
-                results.push(utf8);
+                results.push(format!("uintptr({utf8})"));
                 results.push(format!("uint32(len({string}))"));
             }
             Instruction::StringLift { .. } => {
@@ -1455,7 +1516,7 @@ impl Bindgen for FunctionGenerator<'_> {
                 let value = self.locals.tmp("value");
                 uwriteln!(
                     self.src,
-                    "{value} := unsafe.String((*uint8)({pointer}), {length})"
+                    "{value} := unsafe.String((*uint8)(unsafe.Pointer({pointer})), {length})"
                 );
                 results.push(value)
             }
@@ -1467,9 +1528,9 @@ impl Bindgen for FunctionGenerator<'_> {
                 uwriteln!(
                     self.src,
                     "{data} := unsafe.Pointer(unsafe.SliceData({slice}))\n\
-                     pinner.Pin({data})"
+                     {PINNER}.Pin({data})"
                 );
-                results.push(data);
+                results.push(format!("uintptr({data})"));
                 results.push(format!("uint32(len({slice}))"));
             }
             Instruction::ListCanonLift { element, .. } => {
@@ -1480,7 +1541,7 @@ impl Bindgen for FunctionGenerator<'_> {
                 let value = self.locals.tmp("value");
                 uwriteln!(
                     self.src,
-                    "{value} := unsafe.Slice((*{ty})({pointer}), {length})"
+                    "{value} := unsafe.Slice((*{ty})(unsafe.Pointer({pointer})), {length})"
                 );
                 results.push(value)
             }
@@ -1507,14 +1568,14 @@ impl Bindgen for FunctionGenerator<'_> {
                     self.src,
                     "{slice} := {value}
 {length} := uint32(len({slice}))
-{result} := wit_runtime.Allocate(pinner, uintptr({length} * {size}), {align})
+{result} := wit_runtime.Allocate({PINNER}, uintptr({length} * {size}), {align})
 for index, {ITER_ELEMENT} := range {slice} {{
         {ITER_BASE_POINTER} := unsafe.Add({result}, index * {size})
         {body}
 }}
 "
                 );
-                results.push(result);
+                results.push(format!("uintptr({result})"));
                 results.push(length);
             }
             Instruction::ListLift { element, .. } => {
@@ -1534,7 +1595,7 @@ for index, {ITER_ELEMENT} := range {slice} {{
                     self.src,
                     "{result} := make([]{element_type}, 0, {length})
 for index := 0; index < int({length}); index++ {{
-        {ITER_BASE_POINTER} := unsafe.Add({value}, index * {size})
+        {ITER_BASE_POINTER} := unsafe.Add(unsafe.Pointer({value}), index * {size})
         {body}
         {result} = append({result}, {body_result})        
 }}
@@ -1681,31 +1742,44 @@ for index := 0; index < int({length}); index++ {{
                 store(self, &operands[0], &operands[1], offset, "float64")
             }
             Instruction::LengthLoad { offset } => {
-                load(results, &operands[0], offset, "uint32", &|v| v)
+                load(self, results, &operands[0], offset, "uint32", &|v| v)
             }
             Instruction::PointerLoad { offset } => {
-                self.need_unsafe = true;
-                load(results, &operands[0], offset, "uint32", &|v| {
-                    format!("unsafe.Pointer(uintptr({v}))")
+                load(self, results, &operands[0], offset, "uint32", &|v| {
+                    format!("uintptr({v})")
                 })
             }
             Instruction::I32Load8U { offset } => {
-                load(results, &operands[0], offset, "uint32", &|v| {
+                load(self, results, &operands[0], offset, "uint32", &|v| {
                     format!("uint8({v})")
                 })
             }
+            Instruction::I32Load8S { offset } => {
+                load(self, results, &operands[0], offset, "uint32", &|v| {
+                    format!("int8({v})")
+                })
+            }
             Instruction::I32Load16U { offset } => {
-                load(results, &operands[0], offset, "uint32", &|v| {
+                load(self, results, &operands[0], offset, "uint32", &|v| {
                     format!("uint16({v})")
                 })
             }
-            Instruction::I32Load { offset } => load(results, &operands[0], offset, "int32", &|v| v),
-            Instruction::I64Load { offset } => load(results, &operands[0], offset, "int64", &|v| v),
+            Instruction::I32Load16S { offset } => {
+                load(self, results, &operands[0], offset, "uint32", &|v| {
+                    format!("int16({v})")
+                })
+            }
+            Instruction::I32Load { offset } => {
+                load(self, results, &operands[0], offset, "int32", &|v| v)
+            }
+            Instruction::I64Load { offset } => {
+                load(self, results, &operands[0], offset, "int64", &|v| v)
+            }
             Instruction::F32Load { offset } => {
-                load(results, &operands[0], offset, "float32", &|v| v)
+                load(self, results, &operands[0], offset, "float32", &|v| v)
             }
             Instruction::F64Load { offset } => {
-                load(results, &operands[0], offset, "float64", &|v| v)
+                load(self, results, &operands[0], offset, "float64", &|v| v)
             }
             Instruction::BoolFromI32 => results.push(format!("({} != 0)", operands[0])),
             Instruction::U8FromI32 => results.push(format!("uint8({})", operands[0])),
@@ -1806,7 +1880,7 @@ if {value} {{
                     .iter()
                     .zip(&result_names)
                     .map(|(ty, name)| {
-                        let ty = wasm_type(*ty, &mut self.need_unsafe);
+                        let ty = wasm_type(*ty);
                         format!("var {name} {ty}")
                     })
                     .collect::<Vec<_>>()
@@ -1891,7 +1965,7 @@ default:
                     .iter()
                     .zip(&result_names)
                     .map(|(ty, name)| {
-                        let ty = wasm_type(*ty, &mut self.need_unsafe);
+                        let ty = wasm_type(*ty);
                         format!("var {name} {ty}")
                     })
                     .collect::<Vec<_>>()
@@ -2022,7 +2096,7 @@ default:
                     .iter()
                     .zip(&result_names)
                     .map(|(ty, name)| {
-                        let ty = wasm_type(*ty, &mut self.need_unsafe);
+                        let ty = wasm_type(*ty);
                         format!("var {name} {ty}")
                     })
                     .collect::<Vec<_>>()
@@ -2126,17 +2200,7 @@ default:
             Instruction::IterBasePointer => results.push(ITER_BASE_POINTER.into()),
             Instruction::I32Const { val } => results.push(format!("int32({val})")),
             Instruction::ConstZero { tys } => {
-                for ty in tys.iter() {
-                    results.push(
-                        if let WasmType::Pointer = ty {
-                            self.need_unsafe = true;
-                            "unsafe.Pointer(uintptr(0))"
-                        } else {
-                            "0"
-                        }
-                        .to_string(),
-                    );
-                }
+                results.extend(iter::repeat_with(|| "0".into()).take(tys.len()));
             }
             Instruction::Bitcasts { casts } => {
                 results.extend(
@@ -2188,7 +2252,13 @@ default:
                 }
             }
             Instruction::FutureLift { ty, .. } => {
-                let owner = self.generator.futures_and_streams.get(ty).unwrap().clone();
+                let exported = self.generator.has_exported_resource(resolve, Type::Id(*ty));
+                let owner = self
+                    .generator
+                    .futures_and_streams
+                    .get(&(*ty, exported))
+                    .unwrap()
+                    .clone();
                 let package = self.package_for_owner(resolve, owner.as_ref(), *ty);
                 let TypeDefKind::Future(payload_ty) = &resolve.types[*ty].kind else {
                     unreachable!()
@@ -2204,7 +2274,13 @@ default:
                 results.push(format!("{package}LiftFuture{camel}({handle})"));
             }
             Instruction::StreamLift { ty, .. } => {
-                let owner = self.generator.futures_and_streams.get(ty).unwrap().clone();
+                let exported = self.generator.has_exported_resource(resolve, Type::Id(*ty));
+                let owner = self
+                    .generator
+                    .futures_and_streams
+                    .get(&(*ty, exported))
+                    .unwrap()
+                    .clone();
                 let package = self.package_for_owner(resolve, owner.as_ref(), *ty);
                 let TypeDefKind::Stream(payload_ty) = &resolve.types[*ty].kind else {
                     unreachable!()
@@ -2219,6 +2295,9 @@ default:
                 let handle = &operands[0];
                 results.push(format!("{package}LiftStream{camel}({handle})"));
             }
+            Instruction::GuestDeallocate { .. } => {
+                // Nothing to do here; should be handled when calling `pinner.Unpin()`
+            }
             _ => unimplemented!("{instruction:?}"),
         }
     }
@@ -2232,6 +2311,7 @@ struct InterfaceGenerator<'a> {
     src: String,
     imports: BTreeSet<String>,
     need_unsafe: bool,
+    need_runtime: bool,
 }
 
 impl<'a> InterfaceGenerator<'a> {
@@ -2249,6 +2329,7 @@ impl<'a> InterfaceGenerator<'a> {
             src: String::new(),
             imports: BTreeSet::new(),
             need_unsafe: false,
+            need_runtime: false,
         }
     }
 
@@ -2257,6 +2338,7 @@ impl<'a> InterfaceGenerator<'a> {
             resolve,
             ty,
             self.interface.map(|(_, key)| key),
+            self.in_import,
             &mut self.imports,
         )
     }
@@ -2354,7 +2436,7 @@ func {camel}FromBorrowHandle(handle int32) *{camel} {{
 	return &{camel}{{handle}}
 }}
 "#
-            )
+            );
         } else {
             self.need_unsafe = true;
             uwriteln!(
@@ -2401,7 +2483,22 @@ func {camel}FromBorrowHandle(rep int32) *{camel} {{
 	return (*{camel})(unsafe.Pointer(uintptr(rep)))
 }}
 "#
-            )
+            );
+
+            if self.generator.opts.generate_stubs {
+                self.need_runtime = true;
+                uwriteln!(
+                    self.src,
+                    r#"
+type {camel} struct {{
+        pinner runtime.Pinner
+        handle int32
+}}
+
+func (self *{camel}) OnDrop() {{}}
+"#
+                );
+            }
         }
     }
 
@@ -2619,14 +2716,18 @@ const (
         todo!()
     }
 
-    fn type_future(&mut self, id: TypeId, name: &str, ty: &Option<Type>, docs: &Docs) {
-        _ = (id, name, ty, docs);
-        todo!()
+    fn type_future(&mut self, id: TypeId, name: &str, _: &Option<Type>, docs: &Docs) {
+        let name = name.to_upper_camel_case();
+        let ty = self.type_name(self.resolve, Type::Id(id));
+        let docs = format_docs(docs);
+        uwriteln!(self.src, "{docs}type {name} = {ty}");
     }
 
-    fn type_stream(&mut self, id: TypeId, name: &str, ty: &Option<Type>, docs: &Docs) {
-        _ = (id, name, ty, docs);
-        todo!()
+    fn type_stream(&mut self, id: TypeId, name: &str, _: &Option<Type>, docs: &Docs) {
+        let name = name.to_upper_camel_case();
+        let ty = self.type_name(self.resolve, Type::Id(id));
+        let docs = format_docs(docs);
+        uwriteln!(self.src, "{docs}type {name} = {ty}");
     }
 }
 
@@ -2666,16 +2767,13 @@ fn func_name(resolve: &Resolve, interface: Option<&WorldKey>, func: &Function) -
     format!("{prefix}_{name}")
 }
 
-fn wasm_type(ty: WasmType, need_unsafe: &mut bool) -> &'static str {
+fn wasm_type(ty: WasmType) -> &'static str {
     match ty {
         WasmType::I32 => "int32",
         WasmType::I64 => "int64",
         WasmType::F32 => "float32",
         WasmType::F64 => "float64",
-        WasmType::Pointer => {
-            *need_unsafe = true;
-            "unsafe.Pointer"
-        }
+        WasmType::Pointer => "uintptr",
         WasmType::PointerOrI64 => "int64",
         WasmType::Length => "uint32",
     }
@@ -2738,26 +2836,23 @@ fn cast(op: &str, which: &Bitcast, need_math: &mut bool) -> String {
             format!("int64({op})")
         }
         Bitcast::PToP64 => {
-            format!("int64(uintptr({op}))")
+            format!("int64({op})")
         }
-        Bitcast::I64ToI32 | Bitcast::I64ToL => {
+        Bitcast::I64ToI32 | Bitcast::I64ToL | Bitcast::PToI32 => {
             format!("int32({op})")
         }
         Bitcast::I64ToP64 | Bitcast::P64ToI64 => op.into(),
-        Bitcast::P64ToP | Bitcast::I32ToP | Bitcast::LToP => {
-            format!("unsafe.Pointer(uintptr({op}))")
-        }
-        Bitcast::PToI32 => {
-            todo!("need to pin")
+        Bitcast::P64ToP | Bitcast::LToP | Bitcast::I32ToP => {
+            format!("uintptr({op})")
         }
         Bitcast::PToL => {
-            todo!("need to pin")
+            format!("uint32({op})")
         }
         Bitcast::I32ToL => {
             format!("uint32({op})")
         }
         Bitcast::LToI32 => {
-            format!("int32({op})")
+            format!("uint32({op})")
         }
         Bitcast::None => op.to_string(),
         Bitcast::Sequence(sequence) => {
@@ -2768,7 +2863,11 @@ fn cast(op: &str, which: &Bitcast, need_math: &mut bool) -> String {
     }
 }
 
-fn has_resource(resolve: &Resolve, ty: Type) -> bool {
+fn any(resolve: &Resolve, ty: Type, fun: &dyn Fn(Type) -> bool) -> bool {
+    if fun(ty) {
+        return true;
+    }
+
     match ty {
         Type::Bool
         | Type::U8
@@ -2786,33 +2885,67 @@ fn has_resource(resolve: &Resolve, ty: Type) -> bool {
         Type::Id(id) => {
             let ty = &resolve.types[id];
             match &ty.kind {
+                TypeDefKind::Flags(_) | TypeDefKind::Enum(_) | TypeDefKind::Resource => false,
+                TypeDefKind::Handle(Handle::Own(resource) | Handle::Borrow(resource)) => {
+                    any(resolve, Type::Id(*resource), fun)
+                }
                 TypeDefKind::Record(record) => record
                     .fields
                     .iter()
-                    .any(|field| has_resource(resolve, field.ty)),
+                    .any(|field| any(resolve, field.ty, fun)),
                 TypeDefKind::Variant(variant) => variant
                     .cases
                     .iter()
-                    .any(|case| case.ty.map(|ty| has_resource(resolve, ty)).unwrap_or(false)),
-                TypeDefKind::Flags(_) | TypeDefKind::Enum(_) => false,
-                TypeDefKind::Handle(_) | TypeDefKind::Resource => true,
+                    .any(|case| case.ty.map(|ty| any(resolve, ty, fun)).unwrap_or(false)),
                 TypeDefKind::Option(ty) | TypeDefKind::List(ty) | TypeDefKind::Type(ty) => {
-                    has_resource(resolve, *ty)
+                    any(resolve, *ty, fun)
                 }
                 TypeDefKind::Result(result) => result
                     .ok
-                    .map(|ty| has_resource(resolve, ty))
-                    .or_else(|| result.err.map(|ty| has_resource(resolve, ty)))
+                    .map(|ty| any(resolve, ty, fun))
+                    .or_else(|| result.err.map(|ty| any(resolve, ty, fun)))
                     .unwrap_or(false),
-                TypeDefKind::Tuple(tuple) => {
-                    tuple.types.iter().any(|ty| has_resource(resolve, *ty))
-                }
+                TypeDefKind::Tuple(tuple) => tuple.types.iter().any(|ty| any(resolve, *ty, fun)),
                 TypeDefKind::Future(ty) | TypeDefKind::Stream(ty) => {
-                    ty.map(|ty| has_resource(resolve, ty)).unwrap_or(false)
+                    ty.map(|ty| any(resolve, ty, fun)).unwrap_or(false)
                 }
                 _ => todo!("{:?}", ty.kind),
             }
         }
         _ => todo!("{ty:?}"),
+    }
+}
+
+fn func_declaration(resolve: &Resolve, func: &Function) -> (String, bool) {
+    match &func.kind {
+        FunctionKind::Freestanding | FunctionKind::AsyncFreestanding => {
+            (func.item_name().to_upper_camel_case(), false)
+        }
+        FunctionKind::Constructor(ty) => {
+            let ty = resolve.types[*ty]
+                .name
+                .as_ref()
+                .unwrap()
+                .to_upper_camel_case();
+            (format!("Make{ty}"), false)
+        }
+        FunctionKind::Method(ty) | FunctionKind::AsyncMethod(ty) => {
+            let ty = resolve.types[*ty]
+                .name
+                .as_ref()
+                .unwrap()
+                .to_upper_camel_case();
+            let camel = func.item_name().to_upper_camel_case();
+            (format!("(self *{ty}) {camel}"), true)
+        }
+        FunctionKind::Static(ty) | FunctionKind::AsyncStatic(ty) => {
+            let ty = resolve.types[*ty]
+                .name
+                .as_ref()
+                .unwrap()
+                .to_upper_camel_case();
+            let camel = func.item_name().to_upper_camel_case();
+            (format!("{ty}{camel}"), false)
+        }
     }
 }
