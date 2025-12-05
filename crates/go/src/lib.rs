@@ -633,36 +633,27 @@ impl WorldGenerator for Go {
             self.interface_names.insert(id, name.clone());
         }
 
-        {
-            let (resources, others) =
-                resolve.interfaces[id]
-                    .types
-                    .iter()
-                    .partition::<Vec<_>, _>(|(_, ty)| {
-                        matches!(resolve.types[**ty].kind, TypeDefKind::Resource)
-                    });
+        for (type_name, ty) in &resolve.interfaces[id].types {
+            let exported = matches!(resolve.types[*ty].kind, TypeDefKind::Resource)
+                || self.has_exported_resource(resolve, Type::Id(*ty));
 
-            for (is_resource, types) in [(true, resources), (false, others)] {
-                for (type_name, ty) in types {
-                    let exported =
-                        is_resource || self.has_exported_resource(resolve, Type::Id(*ty));
-                    let mut generator =
-                        InterfaceGenerator::new(self, resolve, Some((id, name)), false);
-                    if exported || !generator.generator.types.contains(ty) {
-                        generator.generator.types.insert(*ty);
-                        generator.define_type(type_name, *ty);
-                    }
-                    let data = generator.into();
-                    if exported {
-                        &mut self.export_interfaces
-                    } else {
-                        &mut self.interfaces
-                    }
-                    .entry(interface_name(resolve, Some(name)))
-                    .or_default()
-                    .extend(data);
-                }
+            let mut generator = InterfaceGenerator::new(self, resolve, Some((id, name)), false);
+
+            if exported || !generator.generator.types.contains(ty) {
+                generator.generator.types.insert(*ty);
+                generator.define_type(type_name, *ty);
             }
+
+            let data = generator.into();
+
+            if exported {
+                &mut self.export_interfaces
+            } else {
+                &mut self.interfaces
+            }
+            .entry(interface_name(resolve, Some(name)))
+            .or_default()
+            .extend(data);
         }
 
         for (_, func) in &resolve.interfaces[id].functions {
